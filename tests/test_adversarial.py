@@ -132,9 +132,32 @@ class TestAttack1PromptInjectionDiscount:
         assert len(rejection_events) == 1
         assert "80.0" not in str(rejection_events[0]["payload"].get("recomputed_total", ""))
 
-    def test_boundary_discount_at_exact_ceiling_is_allowed(self, catalog, fresh_audit, graph, gateway):
+    def test_boundary_discount_at_exact_ceiling_is_allowed(self, catalog, fresh_audit, graph, gateway, monkeypatch):
         """Sanity check: a discount exactly AT the ceiling must be
-        allowed — proves the gatekeeper isn't overly strict."""
+        allowed — proves the gatekeeper isn't overly strict.
+
+        This test only cares about the GATEKEEPER's verdict on the
+        discount itself, not about live Razorpay connectivity, so we
+        force the gateway's order-creation call to succeed
+        deterministically (mirroring the force_failure(...) pattern
+        used elsewhere in this suite for the failure paths). Without
+        this, the unmocked SDK call is a source of unrelated flakiness
+        that has nothing to do with what this test is verifying.
+        """
+        # NOTE: create_order_node reads .order_id, .amount_paise, and
+        # .currency off the return value (both to set cart state and
+        # to log RAZORPAY_ORDER_CREATED), so the mock must expose all three.
+        from types import SimpleNamespace
+        monkeypatch.setattr(
+            gateway, "create_order",
+            lambda cart, *args, **kwargs: SimpleNamespace(
+                order_id="order_test_fixed_success",
+                status="created",
+                amount_paise=int(cart.computed_total * 100),
+                currency="INR",
+            ),
+        )
+
         cart = CartState()
         actions = [
             ProposedAction(action_type="ADD_ITEM", sku="SKU_MUG_002", rationale="legit upsell"),
@@ -148,7 +171,7 @@ class TestAttack1PromptInjectionDiscount:
             "cart": cart, "catalog": catalog, "proposed_actions": actions,
             "gateway": gateway, "user_messages": [],
         })
-        assert result["cart"].status in (CartStatus.ORDER_CREATED, CartStatus.AUDITED_OK, CartStatus.PAYMENT_FAILED)
+        assert result["cart"].status in (CartStatus.ORDER_CREATED, CartStatus.AUDITED_OK)
         # Specifically: it must NOT be rejected for the discount reason.
         assert result["cart"].status != CartStatus.AUDIT_FAILED
 
@@ -225,6 +248,17 @@ class TestAttack2ArithmeticTampering:
         if it breaches the absolute transactable ceiling."""
         cart = CartState(
             line_items=[
+                # LineItem.quantity is capped at 99 (pydantic constraint),
+                # so a single line item can't reach the ceiling on this
+                # SKU (99 x 1299.00 = 128,601.00). Use four separate line
+                # items instead: 4 x 99 x 1299.00 = 514,404.00, legitimately
+                # over the 500,000 ceiling while respecting the per-item cap.
+                LineItem(sku="SKU_GRINDER_003", name="Manual Coffee Grinder",
+                          quantity=99, unit_price=Decimal("1299.00"), discount_pct=Decimal("0")),
+                LineItem(sku="SKU_GRINDER_003", name="Manual Coffee Grinder",
+                          quantity=99, unit_price=Decimal("1299.00"), discount_pct=Decimal("0")),
+                LineItem(sku="SKU_GRINDER_003", name="Manual Coffee Grinder",
+                          quantity=99, unit_price=Decimal("1299.00"), discount_pct=Decimal("0")),
                 LineItem(sku="SKU_GRINDER_003", name="Manual Coffee Grinder",
                           quantity=99, unit_price=Decimal("1299.00"), discount_pct=Decimal("0")),
             ],
