@@ -1,0 +1,341 @@
+<!-- ============================================================ -->
+<!-- FILE: static/index.html                                      -->
+<!-- ============================================================ -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Agentic Commerce — Razorpay Demo</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<style>
+  body { font-family: 'Inter', system-ui, sans-serif; }
+  .chat-scroll::-webkit-scrollbar, .audit-scroll::-webkit-scrollbar { width: 6px; }
+  .chat-scroll::-webkit-scrollbar-thumb, .audit-scroll::-webkit-scrollbar-thumb {
+    background: #4b5563; border-radius: 3px;
+  }
+  .pulse-dot { animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+  .msg-enter { animation: msgIn .25s ease-out; }
+  @keyframes msgIn { from { opacity:0; transform: translateY(6px);} to {opacity:1; transform:none;} }
+</style>
+</head>
+<body class="bg-slate-950 text-slate-100 h-screen overflow-hidden">
+
+<div class="flex h-screen">
+
+  <!-- ================= LEFT: CHAT ================= -->
+  <div class="w-1/2 flex flex-col border-r border-slate-800">
+    <header class="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
+      <div>
+        <h1 class="text-lg font-semibold tracking-tight">Merchant Assistant</h1>
+        <p class="text-xs text-slate-400">Razorpay test-mode • LangGraph-audited</p>
+      </div>
+      <div class="flex items-center gap-2 text-xs">
+        <span id="cart-id-badge" class="px-2 py-1 rounded bg-slate-800 text-slate-400">no session</span>
+        <button onclick="resetSession()" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">Reset</button>
+      </div>
+    </header>
+
+    <div id="chat-log" class="chat-scroll flex-1 overflow-y-auto px-6 py-4 space-y-3"></div>
+
+    <div class="px-6 py-4 border-t border-slate-800">
+      <div class="flex gap-2 mb-2 text-xs">
+        <button onclick="armFailure('timeout')" class="px-2 py-1 rounded bg-amber-900/40 text-amber-300 hover:bg-amber-900/70">Simulate timeout</button>
+        <button onclick="armFailure('signature')" class="px-2 py-1 rounded bg-rose-900/40 text-rose-300 hover:bg-rose-900/70">Simulate sig. mismatch</button>
+        <span id="armed-badge" class="px-2 py-1 rounded hidden bg-yellow-500/20 text-yellow-300"></span>
+      </div>
+      <form id="chat-form" class="flex gap-2">
+        <input id="chat-input" autocomplete="off"
+          class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-sm
+                 focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-slate-500"
+          placeholder="e.g. I'd like some filter coffee" />
+        <button type="submit"
+          class="px-5 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm font-medium transition">
+          Send
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ================= RIGHT: CART + AUDIT ================= -->
+  <div class="w-1/2 flex flex-col overflow-y-auto">
+
+    <!-- Cart panel -->
+    <div class="p-6 border-b border-slate-800">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400">Cart</h2>
+        <span id="cart-status" class="text-xs px-2 py-1 rounded-full bg-slate-800 text-slate-300">DRAFT</span>
+      </div>
+
+      <div id="cart-items" class="space-y-2 mb-4"></div>
+
+      <div class="flex items-center justify-between border-t border-slate-800 pt-3">
+        <span class="text-sm text-slate-400">Total</span>
+        <span id="cart-total" class="text-2xl font-bold tracking-tight">₹0.00</span>
+      </div>
+
+      <div id="system-notes" class="mt-3 space-y-2"></div>
+
+      <button id="pay-btn" onclick="triggerCheckout()"
+        class="mt-4 w-full py-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 font-medium text-sm
+               disabled:opacity-40 disabled:cursor-not-allowed transition" disabled>
+        Pay with Razorpay (Test Mode)
+      </button>
+    </div>
+
+    <!-- Audit trail panel -->
+    <div class="p-6 flex-1 flex flex-col min-h-0">
+      <button onclick="toggleAudit()" class="flex items-center justify-between w-full mb-3 group">
+        <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400 group-hover:text-slate-200">
+          Hash-Chained Audit Trail
+        </h2>
+        <div class="flex items-center gap-2">
+          <span id="chain-integrity" class="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-500">—</span>
+          <svg id="audit-chevron" class="w-4 h-4 text-slate-500 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+          </svg>
+        </div>
+      </button>
+      <div id="audit-body" class="audit-scroll flex-1 overflow-y-auto space-y-1.5 text-xs font-mono hidden"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API_BASE = window.location.origin;
+let cartId = null;
+let pendingFailure = null;
+let auditVisible = true;
+let razorpayKeyId = "rzp_test_xxxxxxxxxxxxxx"; // test-mode key id, safe to expose client-side
+
+function el(tag, cls, html) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (html !== undefined) e.innerHTML = html;
+  return e;
+}
+
+function appendMessage(role, text) {
+  const log = document.getElementById('chat-log');
+  const wrap = el('div', `msg-enter flex ${role === 'user' ? 'justify-end' : 'justify-start'}`);
+  const bubble = el('div',
+    `max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+      role === 'user'
+        ? 'bg-indigo-600 text-white rounded-br-sm'
+        : 'bg-slate-800 text-slate-100 rounded-bl-sm'
+    }`,
+    escapeHtml(text)
+  );
+  wrap.appendChild(bubble);
+  log.appendChild(wrap);
+  log.scrollTop = log.scrollHeight;
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.innerText = s;
+  return d.innerHTML;
+}
+
+function showTyping() {
+  const log = document.getElementById('chat-log');
+  const wrap = el('div', 'msg-enter flex justify-start', '');
+  wrap.id = 'typing-indicator';
+  const bubble = el('div', 'bg-slate-800 rounded-2xl rounded-bl-sm px-4 py-3 text-sm text-slate-400',
+    '<span class="pulse-dot">●</span> <span class="pulse-dot" style="animation-delay:.2s">●</span> <span class="pulse-dot" style="animation-delay:.4s">●</span>');
+  wrap.appendChild(bubble);
+  log.appendChild(wrap);
+  log.scrollTop = log.scrollHeight;
+}
+function hideTyping() {
+  document.getElementById('typing-indicator')?.remove();
+}
+
+function armFailure(mode) {
+  pendingFailure = mode;
+  const badge = document.getElementById('armed-badge');
+  badge.textContent = `⚠ ${mode} armed for next message`;
+  badge.classList.remove('hidden');
+}
+
+function resetSession() {
+  cartId = null;
+  pendingFailure = null;
+  document.getElementById('chat-log').innerHTML = '';
+  document.getElementById('cart-items').innerHTML = '';
+  document.getElementById('cart-total').textContent = '₹0.00';
+  document.getElementById('cart-status').textContent = 'DRAFT';
+  document.getElementById('cart-id-badge').textContent = 'no session';
+  document.getElementById('system-notes').innerHTML = '';
+  document.getElementById('audit-body').innerHTML = '';
+  document.getElementById('pay-btn').disabled = true;
+  appendMessage('assistant', "Hi! I'm your shopping assistant. What can I help you find today?");
+}
+
+function renderCart(payload) {
+  document.getElementById('cart-id-badge').textContent = payload.cart_id.slice(0, 16) + '…';
+  document.getElementById('cart-status').textContent = payload.cart_status;
+
+  const statusColors = {
+    DRAFT: 'bg-slate-800 text-slate-300',
+    PENDING_AUDIT: 'bg-blue-900/50 text-blue-300',
+    AUDIT_FAILED: 'bg-rose-900/50 text-rose-300',
+    AUDITED_OK: 'bg-emerald-900/50 text-emerald-300',
+    ORDER_CREATED: 'bg-emerald-900/50 text-emerald-300',
+    PAYMENT_FAILED: 'bg-rose-900/50 text-rose-300',
+    RECOVERED: 'bg-amber-900/50 text-amber-300',
+    COMPLETED: 'bg-emerald-600/60 text-emerald-100',
+  };
+  const statusEl = document.getElementById('cart-status');
+  statusEl.className = `text-xs px-2 py-1 rounded-full ${statusColors[payload.cart_status] || 'bg-slate-800 text-slate-300'}`;
+
+  const itemsWrap = document.getElementById('cart-items');
+  itemsWrap.innerHTML = '';
+  if (!payload.line_items.length) {
+    itemsWrap.appendChild(el('p', 'text-sm text-slate-500 italic', 'Cart is empty'));
+  }
+  for (const li of payload.line_items) {
+    const row = el('div', 'flex items-center justify-between text-sm bg-slate-900/60 rounded-lg px-3 py-2');
+    const left = el('div', '');
+    left.appendChild(el('div', 'font-medium flex items-center gap-2',
+      `${escapeHtml(li.name)} ${li.added_by_upsell ? '<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-500/30 text-indigo-300">upsell</span>' : ''}`));
+    left.appendChild(el('div', 'text-xs text-slate-500', `${li.sku} · qty ${li.quantity}${li.discount_pct > 0 ? ` · -${li.discount_pct}%` : ''}`));
+    const right = el('div', 'font-mono text-sm', `₹${li.unit_price}`);
+    row.appendChild(left);
+    row.appendChild(right);
+    itemsWrap.appendChild(row);
+  }
+
+  document.getElementById('cart-total').textContent = `₹${payload.computed_total}`;
+
+  const notesWrap = document.getElementById('system-notes');
+  notesWrap.innerHTML = '';
+  for (const note of (payload.system_notes || [])) {
+    const isReject = /can't proceed|failed|couldn't reach|halted/i.test(note);
+    notesWrap.appendChild(el('div',
+      `text-xs rounded-lg px-3 py-2 ${isReject ? 'bg-rose-950/60 text-rose-300 border border-rose-900' : 'bg-amber-950/60 text-amber-300 border border-amber-900'}`,
+      escapeHtml(note)));
+  }
+
+  document.getElementById('pay-btn').disabled = !payload.order_id;
+  if (payload.order_id) {
+    window._activeOrder = { orderId: payload.order_id, amount: payload.computed_total, cartId: payload.cart_id };
+  }
+}
+
+async function refreshAudit() {
+  if (!cartId) return;
+  const res = await fetch(`${API_BASE}/api/audit/${cartId}`);
+  if (!res.ok) return;
+  const data = await res.json();
+
+  const badge = document.getElementById('chain-integrity');
+  badge.textContent = data.chain_intact ? '✓ chain intact' : '✗ tampering detected';
+  badge.className = `text-xs px-2 py-0.5 rounded-full ${data.chain_intact ? 'bg-emerald-900/50 text-emerald-300' : 'bg-rose-900/50 text-rose-300'}`;
+
+  const body = document.getElementById('audit-body');
+  body.innerHTML = '';
+  for (const entry of data.entries) {
+    const row = el('div', 'border-l-2 border-slate-800 pl-3 py-1 hover:border-indigo-500 transition-colors');
+    row.appendChild(el('div', 'flex items-center gap-2',
+      `<span class="text-slate-600">#${entry.seq}</span> <span class="text-indigo-400">${entry.event_type}</span> <span class="text-slate-600">${entry.entry_hash.slice(0,10)}…</span>`));
+    row.appendChild(el('div', 'text-slate-500 truncate', JSON.stringify(entry.payload)));
+    body.appendChild(row);
+  }
+  body.scrollTop = body.scrollHeight;
+}
+
+function toggleAudit() {
+  auditVisible = !auditVisible;
+  document.getElementById('audit-body').classList.toggle('hidden', !auditVisible);
+  document.getElementById('audit-chevron').style.transform = auditVisible ? 'rotate(0deg)' : 'rotate(-90deg)';
+}
+
+async function sendMessage(message) {
+  appendMessage('user', message);
+  showTyping();
+
+  const body = { cart_id: cartId, message };
+  if (pendingFailure) {
+    body.simulate_failure = pendingFailure;
+    pendingFailure = null;
+    document.getElementById('armed-badge').classList.add('hidden');
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const payload = await res.json();
+    hideTyping();
+
+    if (!res.ok) {
+      appendMessage('assistant', `⚠ ${payload.detail || 'Something went wrong.'}`);
+      return;
+    }
+
+    cartId = payload.cart_id;
+    appendMessage('assistant', payload.assistant_message);
+    renderCart(payload);
+    await refreshAudit();
+  } catch (err) {
+    hideTyping();
+    appendMessage('assistant', `⚠ Connection error: ${err.message}`);
+  }
+}
+
+function triggerCheckout() {
+  const order = window._activeOrder;
+  if (!order) return;
+
+  const options = {
+    key: razorpayKeyId,
+    amount: Math.round(parseFloat(order.amount) * 100),
+    currency: 'INR',
+    name: 'Agentic Commerce Demo',
+    description: 'Test-mode checkout',
+    order_id: order.orderId,
+    handler: async function (response) {
+      const res = await fetch(`${API_BASE}/api/checkout/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cart_id: order.cartId,
+          razorpay_order_id: response.razorpay_order_id,
+          razorpay_payment_id: response.razorpay_payment_id,
+          razorpay_signature: response.razorpay_signature,
+        }),
+      });
+      const data = await res.json();
+      appendMessage('assistant',
+        data.verified
+          ? '✅ Payment verified — thank you! Your order is confirmed.'
+          : '⚠ Payment signature could not be verified. No funds captured.');
+      document.getElementById('cart-status').textContent = data.cart_status;
+      await refreshAudit();
+    },
+    theme: { color: '#6366f1' },
+  };
+
+  const rzp = new Razorpay(options);
+  rzp.open();
+}
+
+document.getElementById('chat-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const input = document.getElementById('chat-input');
+  const val = input.value.trim();
+  if (!val) return;
+  input.value = '';
+  sendMessage(val);
+});
+
+// initial greeting
+resetSession();
+</script>
+</body>
+</html>
