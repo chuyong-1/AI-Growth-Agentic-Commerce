@@ -1,0 +1,32 @@
+# ============================================================
+# FILE: serverless.yml  (excerpt — EventBridge schedule block)
+# ============================================================
+functions:
+  expireStaleCampaigns:
+    handler: campaign_scheduler.lambda_handler
+    timeout: 60
+    memorySize: 256
+    environment:
+      CAMPAIGN_TABLE: ${self:custom.campaignTable}
+      AUDIT_TABLE: ${self:custom.auditTable}
+      AWS_REGION: ${self:provider.region}
+    events:
+      - eventBridge:
+          # Runs hourly, on the hour.
+          schedule: rate(1 hour)
+          enabled: true
+          input:
+            source: "agentictrade.scheduler"
+            action: "expire_stale_campaigns"
+    iamRoleStatementsInherit: true
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:Scan
+          - dynamodb:UpdateItem
+          - dynamodb:GetItem
+          - dynamodb:PutItem
+        Resource:
+          - !GetAtt CampaignsTable.Arn
+          - !GetAtt AuditTable.Arn
+          - !Sub "${AuditTable.Arn}/index/*"
