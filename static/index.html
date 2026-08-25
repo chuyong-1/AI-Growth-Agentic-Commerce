@@ -1,210 +1,89 @@
 <!-- ============================================================ -->
 <!-- FILE: static/index.html                                      -->
-<!-- Redesigned UI — clean, Razorpay-inspired checkout aesthetic   -->
-<!-- (light, card-based, blue accent) with upgraded UX everywhere  -->
+<!-- AgenticTrade — Merchant Console (original design system)      -->
 <!-- ============================================================ -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>AgenticTrade — Merchant Assistant</title>
+<title>AgenticTrade Console</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root{
-    --brand:#3b82f6;
-    --brand-dark:#2563eb;
-    --brand-light:#eff6ff;
-    --ink:#0f172a;
-    --muted:#64748b;
-    --border:#e2e8f0;
-    --success:#16a34a;
-    --success-bg:#f0fdf4;
-    --danger:#dc2626;
-    --danger-bg:#fef2f2;
-    --warn:#d97706;
-    --warn-bg:#fffbeb;
-    --surface:#ffffff;
-    --canvas:#f8fafc;
+    --accent:#4338ca; --accent-dark:#3730a3; --accent-soft:#eef2ff;
+    --ink:#0f1222; --muted:#8a8fa3; --border:#e7e8f0; --border-strong:#d7d9e6;
+    --success:#0f9d58; --success-bg:#eafaf1; --danger:#d93a3a; --danger-bg:#fdecec;
+    --warn:#b26a00; --warn-bg:#fff6e5; --surface:#ffffff; --canvas:#f5f6fa; --canvas-alt:#eef0f6;
   }
-  *{ box-sizing:border-box; }
-  html,body{ height:100%; }
-  body{
-    font-family:'Plus Jakarta Sans', 'Inter', system-ui, sans-serif;
-    background:var(--canvas);
-    color:var(--ink);
-    -webkit-font-smoothing:antialiased;
-    -moz-osx-font-smoothing:grayscale;
-    text-rendering:optimizeLegibility;
-    font-feature-settings:"ss01" on, "cv01" on;
-    letter-spacing:-0.011em;
-  }
+  *{ box-sizing:border-box; } html,body{ height:100%; }
+  body{ font-family:'Inter', system-ui, sans-serif; background:var(--canvas); color:var(--ink);
+        -webkit-font-smoothing:antialiased; letter-spacing:-0.01em; }
   .mono{ font-family:'JetBrains Mono', ui-monospace, monospace; letter-spacing:0; }
-  h1,h2,h3,.font-extrabold,.font-bold,.font-semibold{ letter-spacing:-0.02em; }
+  .tabular{ font-variant-numeric: tabular-nums; }
+  ::-webkit-scrollbar{ width:8px; height:8px; } ::-webkit-scrollbar-track{ background:transparent; }
+  ::-webkit-scrollbar-thumb{ background:#d1d3e0; border-radius:8px; }
+  ::-webkit-scrollbar-thumb:hover{ background:#b3b6cc; }
 
-  ::-webkit-scrollbar{ width:8px; height:8px; }
-  ::-webkit-scrollbar-track{ background:transparent; }
-  ::-webkit-scrollbar-thumb{ background:#cbd5e1; border-radius:8px; }
-  ::-webkit-scrollbar-thumb:hover{ background:#94a3b8; }
-
-  @keyframes msgIn{ from{opacity:0; transform:translateY(8px) scale(.98);} to{opacity:1; transform:none;} }
-  .msg-enter{ animation: msgIn .28s cubic-bezier(.16,1,.3,1); }
-
-  @keyframes fadeSlideDown{ from{opacity:0; transform:translateY(-6px);} to{opacity:1; transform:none;} }
-  .note-enter{ animation: fadeSlideDown .25s ease-out; }
-
-  @keyframes rowIn{ from{opacity:0; transform:translateX(-6px);} to{opacity:1; transform:none;} }
-  .row-enter{ animation: rowIn .25s ease-out; }
-
-  @keyframes pulse-dot{ 0%,80%,100%{ transform:scale(.6); opacity:.4 } 40%{ transform:scale(1); opacity:1 } }
-  .typing-dot{ animation: pulse-dot 1.2s infinite ease-in-out; }
-
+  @keyframes msgIn{ from{opacity:0; transform:translateY(6px) scale(.985);} to{opacity:1; transform:none;} }
+  .msg-enter{ animation: msgIn .3s cubic-bezier(.16,1,.3,1); }
+  @keyframes fadeSlideDown{ from{opacity:0; transform:translateY(-8px);} to{opacity:1; transform:none;} }
+  .note-enter{ animation: fadeSlideDown .28s cubic-bezier(.16,1,.3,1); }
+  @keyframes rowIn{ from{opacity:0; transform:translateY(4px);} to{opacity:1; transform:none;} }
+  .row-enter{ animation: rowIn .28s cubic-bezier(.16,1,.3,1) both; }
+  @keyframes pulse-dot{ 0%,80%,100%{ transform:scale(.55); opacity:.35 } 40%{ transform:scale(1); opacity:1 } }
+  .typing-dot{ animation: pulse-dot 1.3s infinite ease-in-out; }
   @keyframes shimmer{ 0%{ background-position:-400px 0 } 100%{ background-position:400px 0 } }
-  .skeleton{
-    background: linear-gradient(90deg, #f1f5f9 0px, #e2e8f0 40px, #f1f5f9 80px);
-    background-size:600px 100%;
-    animation: shimmer 1.6s infinite linear;
-  }
+  .skeleton{ background: linear-gradient(90deg, #eceef4 0px, #dde0ea 40px, #eceef4 80px);
+    background-size:600px 100%; animation: shimmer 1.5s infinite linear; border-radius:8px; }
+  @keyframes ringPulse{ 0%{ box-shadow: 0 0 0 0 rgba(67,56,202,.30); } 70%{ box-shadow: 0 0 0 9px rgba(67,56,202,0); } 100%{ box-shadow: 0 0 0 0 rgba(67,56,202,0); } }
+  .ring-pulse{ animation: ringPulse 2s infinite; }
+  @keyframes spin{ to{ transform:rotate(360deg); } } .spinner{ animation: spin .7s linear infinite; }
+  @keyframes numberSettle{ from{ opacity:.4; transform:translateY(2px); } to{ opacity:1; transform:none; } }
+  .number-settle{ animation: numberSettle .22s ease-out; display:inline-block; }
+  .glass-header{ background: rgba(255,255,255,.92); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
 
-  @keyframes checkPop{ 0%{ transform:scale(0); } 60%{ transform:scale(1.15); } 100%{ transform:scale(1); } }
-  .check-pop{ animation: checkPop .4s cubic-bezier(.16,1,.3,1); }
+  .btn-primary{ background: linear-gradient(180deg, #4f46e5, var(--accent));
+    box-shadow: 0 1px 2px rgba(67,56,202,.12), 0 6px 16px rgba(67,56,202,.20);
+    transition: transform .12s ease, box-shadow .12s ease, filter .12s ease; }
+  .btn-primary:hover:not(:disabled){ filter:brightness(1.06); transform:translateY(-1px); box-shadow:0 10px 24px rgba(67,56,202,.28); }
+  .btn-primary:active:not(:disabled){ transform:translateY(0); filter:brightness(.98); }
+  .btn-primary:disabled{ background:#e4e5ee; box-shadow:none; color:#a6a9bd; cursor:not-allowed; }
 
-  @keyframes ringPulse{
-    0%{ box-shadow: 0 0 0 0 rgba(59,130,246,.35); }
-    70%{ box-shadow: 0 0 0 10px rgba(59,130,246,0); }
-    100%{ box-shadow: 0 0 0 0 rgba(59,130,246,0); }
-  }
-  .ring-pulse{ animation: ringPulse 1.8s infinite; }
+  .card{ background:var(--surface); border:1px solid var(--border); border-radius:18px;
+    box-shadow: 0 1px 2px rgba(15,18,34,.03), 0 8px 24px -12px rgba(15,18,34,.08); }
 
-  /* ---- Razorpay-style spring micro-interactions ---- */
-  :root{ --spring: cubic-bezier(.34,1.56,.64,1); --smooth: cubic-bezier(.16,1,.3,1); }
-
-  @keyframes logoShimmer{
-    0%{ background-position:0% 50%; }
-    50%{ background-position:100% 50%; }
-    100%{ background-position:0% 50%; }
-  }
-  .logo-badge{
-    background:linear-gradient(120deg,#4f8bfb,#2563eb,#60a5fa,#2563eb);
-    background-size:280% 280%;
-    animation: logoShimmer 6s ease-in-out infinite;
-  }
-
-  @keyframes floatIn{
-    from{ opacity:0; transform:translateY(10px) scale(.97); }
-    to{ opacity:1; transform:none; }
-  }
-  .float-in{ animation: floatIn .45s var(--smooth); }
-
-  h1, h2, button, .status-pill, .tab-btn{ transition: all .18s var(--smooth); }
-
-  .card{
-    transition: transform .22s var(--smooth), box-shadow .22s var(--smooth), border-color .22s var(--smooth);
-  }
-  .card:hover{
-    box-shadow: 0 4px 20px rgba(15,23,42,.06), 0 1px 3px rgba(15,23,42,.04);
-  }
-
-  .btn-primary{
-    transition: transform .16s var(--spring), box-shadow .2s var(--smooth), filter .16s ease;
-  }
-  .btn-primary:active:not(:disabled){ transform:scale(.97); }
-
-  .tab-btn{ position:relative; }
-  .tab-btn:active{ transform:scale(.96); }
-
-  .chip-btn{ transition: transform .16s var(--spring), background-color .15s ease, box-shadow .15s ease; }
-  .chip-btn:active{ transform:scale(.94) translateY(0); }
-
-  .status-pill{ transition: background-color .25s var(--smooth), color .25s var(--smooth), transform .2s var(--spring); }
-
-  @keyframes numberPop{
-    0%{ transform:scale(1); }
-    30%{ transform:scale(1.08); }
-    100%{ transform:scale(1); }
-  }
-  .number-pop{ animation: numberPop .3s var(--spring); display:inline-block; }
-
-  #budget-bar-fill{ transition: width .5s var(--smooth); position:relative; overflow:hidden; }
-  #budget-bar-fill::after{
-    content:''; position:absolute; inset:0;
-    background:linear-gradient(90deg, transparent, rgba(255,255,255,.35), transparent);
-    animation: shimmer 2.2s infinite linear; background-size:200% 100%;
-  }
-
-  .row-enter, .audit-row{ transition: transform .2s var(--smooth), background-color .15s ease, border-color .15s ease, box-shadow .2s ease; }
-  .audit-row:hover{ transform:translateX(2px); }
-
-  svg{ transition: transform .18s var(--smooth); }
-  .chip-btn:hover svg, button:hover svg{ transform:scale(1.08); }
-
-  input.input-field{ transition: border-color .18s var(--smooth), box-shadow .18s var(--smooth), transform .12s ease; }
-  input.input-field:focus{ transform:translateY(-1px); }
-
-  @keyframes dotBounce{ 0%,80%,100%{ transform:translateY(0); } 40%{ transform:translateY(-4px); } }
-  .typing-dot{ animation: dotBounce 1.1s infinite var(--smooth); }
-
-  .glass-header{
-    background: rgba(255,255,255,.85);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-  }
-
-  .btn-primary{
-    background: linear-gradient(180deg, #4f8bfb, var(--brand-dark));
-    box-shadow: 0 1px 2px rgba(37,99,235,.15), 0 4px 12px rgba(37,99,235,.18);
-    transition: transform .12s ease, box-shadow .12s ease, filter .12s ease;
-  }
-  .btn-primary:hover:not(:disabled){ filter:brightness(1.05); transform:translateY(-1px); box-shadow:0 6px 18px rgba(37,99,235,.28); }
-  .btn-primary:active:not(:disabled){ transform:translateY(0); }
-  .btn-primary:disabled{ background:#e2e8f0; box-shadow:none; color:#94a3b8; cursor:not-allowed; }
-
-  .card{
-    background:var(--surface);
-    border:1px solid var(--border);
-    border-radius:16px;
-    box-shadow: 0 1px 2px rgba(15,23,42,.04);
-  }
-
-  .input-field{
-    background:var(--surface); border:1.5px solid var(--border);
-    transition: border-color .15s ease, box-shadow .15s ease;
-  }
-  .input-field:focus{
-    outline:none; border-color:var(--brand);
-    box-shadow: 0 0 0 4px rgba(59,130,246,.12);
-  }
+  .input-field{ background:var(--surface); border:1.5px solid var(--border-strong);
+    transition: border-color .15s ease, box-shadow .15s ease; }
+  .input-field:focus{ outline:none; border-color:var(--accent); box-shadow: 0 0 0 4px rgba(67,56,202,.14); }
 
   .status-pill{ transition: all .2s ease; }
-
-  .chip-btn{ transition: all .15s ease; }
-  .chip-btn:hover{ transform:translateY(-1px); }
+  .chip-btn{ transition: all .15s ease; } .chip-btn:hover{ transform:translateY(-1px); }
   .chip-btn:active{ transform:translateY(0) scale(.97); }
+  .list-row{ transition: background .15s ease, border-color .15s ease; }
+  .list-row:hover{ background:var(--canvas-alt); border-color:var(--border-strong); }
+  .hairline{ border-color:var(--border); } ::selection{ background:#dbe0fb; }
 
-  .audit-row{ transition: background .15s ease, border-color .15s ease; }
-  .audit-row:hover{ background:#f8fafc; border-color:#cbd5e1; }
+  .tab-btn{ position:relative; transition: color .15s ease; }
+  .tab-btn[data-active="true"]{ color:var(--accent); } .tab-btn[data-active="false"]{ color:var(--muted); }
+  .tab-underline{ position:absolute; left:14px; right:14px; bottom:-1px; height:2.5px;
+    background:var(--accent); border-radius:2px 2px 0 0; transition: opacity .18s ease; }
 
-  .hairline{ border-color:var(--border); }
+  #toast-stack{ position:fixed; top:16px; right:16px; z-index:60; display:flex; flex-direction:column; gap:10px; max-width:340px; }
+  .toast{ animation: toastIn .28s cubic-bezier(.16,1,.3,1); box-shadow: 0 10px 30px -6px rgba(15,18,34,.18); }
+  @keyframes toastIn{ from{opacity:0; transform:translateX(24px) scale(.97);} to{opacity:1; transform:none;} }
 
-  ::selection{ background:#bfdbfe; }
+  .brand-mark{ background: linear-gradient(135deg,#5850ec,#3730a3); box-shadow: inset 0 1px 0 rgba(255,255,255,.18); }
+  .progress-track{ background: #e9eaf3; border-radius:999px; overflow:hidden; }
+  .progress-fill{ background: linear-gradient(90deg,#6366f1,#4338ca); transition: width .4s cubic-bezier(.16,1,.3,1); }
 
-  .scale-in{ animation: scaleIn .18s ease-out; }
-  @keyframes scaleIn{ from{opacity:0; transform:scale(.96);} to{opacity:1; transform:scale(1);} }
-
-  #toast-stack{ position:fixed; top:16px; right:16px; z-index:60; display:flex; flex-direction:column; gap:8px; }
-  .toast{
-    animation: toastIn .25s cubic-bezier(.16,1,.3,1);
-    box-shadow: 0 8px 24px rgba(15,23,42,.12);
-  }
-  @keyframes toastIn{ from{opacity:0; transform:translateX(20px);} to{opacity:1; transform:none;} }
-
-  @media (max-width: 900px){
-    .app-shell{ flex-direction:column; height:auto; }
-    .split-pane{ width:100% !important; height:auto; }
+  @media (max-width: 1100px){
+    .app-shell{ flex-direction:column; height:auto; min-height:100vh; }
+    .split-pane{ width:100% !important; height:auto; max-height:none !important; }
     .split-pane + .split-pane{ border-left:none; border-top:1px solid var(--border); }
   }
 </style>
@@ -215,51 +94,40 @@
 
 <div class="app-shell flex h-screen">
 
-  <!-- ================= LEFT: CHAT ================= -->
-  <div class="split-pane w-1/2 flex flex-col border-r hairline bg-white">
+  <div class="split-pane w-[42%] flex flex-col border-r hairline bg-white">
     <header class="glass-header sticky top-0 z-10 px-6 py-4 border-b hairline flex items-center justify-between">
       <div class="flex items-center gap-3">
-        <div class="logo-badge w-9 h-9 rounded-xl flex items-center justify-center text-white font-bold text-sm">AT</div>
+        <div class="brand-mark w-9 h-9 rounded-[10px] flex items-center justify-center text-white font-bold text-[13px]">AT</div>
         <div>
           <h1 class="text-[15px] font-semibold tracking-tight leading-none">Merchant Assistant</h1>
-          <p class="text-xs text-slate-400 mt-1 flex items-center gap-1.5">
-            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block"></span>
-            Razorpay test-mode &middot; LangGraph-audited
+          <p class="text-[11.5px] text-slate-400 mt-1.5 flex items-center gap-1.5">
+            <span id="conn-dot" class="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block"></span>
+            <span id="conn-label">Connected</span>
+            <span class="text-slate-300">&middot;</span><span>Test mode</span>
           </p>
         </div>
       </div>
       <div class="flex items-center gap-2 text-xs">
         <span id="cart-id-badge" class="mono px-2.5 py-1.5 rounded-lg bg-slate-100 text-slate-500 border hairline">no session</span>
-        <button onclick="resetSession()"
-          class="chip-btn px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 font-medium border hairline">
-          Reset
-        </button>
+        <button onclick="resetSession()" class="chip-btn px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 font-medium border hairline">Reset</button>
       </div>
     </header>
 
-    <div id="chat-log" class="flex-1 overflow-y-auto px-6 py-5 space-y-3.5"></div>
+    <div id="chat-log" class="flex-1 overflow-y-auto px-6 py-5 space-y-4"></div>
 
     <div class="px-6 py-4 border-t hairline bg-white">
       <div class="flex items-center gap-2 mb-3 text-xs flex-wrap">
-        <span class="text-slate-400 font-medium mr-0.5">Test tools:</span>
-        <button onclick="armFailure('timeout')"
-          class="chip-btn px-2.5 py-1 rounded-full border border-amber-200 bg-amber-50 text-amber-700 font-medium hover:bg-amber-100">
-          ⏱ Simulate timeout
-        </button>
-        <button onclick="armFailure('signature')"
-          class="chip-btn px-2.5 py-1 rounded-full border border-rose-200 bg-rose-50 text-rose-700 font-medium hover:bg-rose-100">
-          🔒 Simulate sig. mismatch
-        </button>
+        <span class="text-slate-400 font-medium mr-0.5">Diagnostics:</span>
+        <button onclick="armFailure('timeout')" class="chip-btn px-2.5 py-1 rounded-full border border-amber-200 bg-amber-50 text-amber-700 font-medium hover:bg-amber-100">Simulate timeout</button>
+        <button onclick="armFailure('signature')" class="chip-btn px-2.5 py-1 rounded-full border border-rose-200 bg-rose-50 text-rose-700 font-medium hover:bg-rose-100">Simulate signature mismatch</button>
         <span id="armed-badge" class="hidden px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 font-medium"></span>
       </div>
       <form id="chat-form" class="flex gap-2">
-        <input id="chat-input" autocomplete="off"
-          class="input-field flex-1 rounded-xl px-4 py-3 text-sm placeholder-slate-400"
-          placeholder="e.g. I'd like some filter coffee" />
-        <button type="submit"
-          class="btn-primary px-5 py-3 rounded-xl text-sm font-semibold text-white flex items-center gap-2">
-          Send
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+        <input id="chat-input" autocomplete="off" class="input-field flex-1 rounded-xl px-4 py-3 text-sm placeholder-slate-400"
+          placeholder="Ask about products, request a discount, or check out…" />
+        <button type="submit" class="btn-primary px-5 py-3 rounded-xl text-sm font-semibold text-white flex items-center gap-2 shrink-0">
+          <span id="send-label">Send</span>
+          <svg id="send-icon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
             <path stroke-linecap="round" stroke-linejoin="round" d="M13 5l7 7-7 7M5 12h14" />
           </svg>
         </button>
@@ -267,152 +135,112 @@
     </div>
   </div>
 
-  <!-- ================= RIGHT: CART + AUDIT + CAMPAIGNS ================= -->
-  <div class="split-pane w-1/2 flex flex-col overflow-y-auto bg-slate-50">
-
-    <!-- Tab bar -->
-    <div class="px-6 pt-6">
-      <div class="inline-flex p-1 rounded-xl bg-slate-100 border hairline gap-1">
-        <button id="tab-btn-checkout" onclick="switchTab('checkout')"
-          class="tab-btn px-4 py-2 rounded-lg text-xs font-semibold transition-all bg-white text-slate-800 shadow-sm">
-          Checkout
+  <div class="split-pane w-[58%] flex flex-col overflow-hidden bg-[var(--canvas)]">
+    <div class="glass-header sticky top-0 z-10 border-b hairline px-6 pt-4">
+      <div class="flex items-center gap-1">
+        <button onclick="switchTab('checkout')" data-tab-btn="checkout" class="tab-btn px-3.5 pb-3 text-[13.5px] font-semibold flex items-center gap-2">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
+          Checkout<div class="tab-underline" data-underline="checkout"></div>
         </button>
-        <button id="tab-btn-campaigns" onclick="switchTab('campaigns')"
-          class="tab-btn px-4 py-2 rounded-lg text-xs font-semibold transition-all text-slate-500 hover:text-slate-700">
-          Campaigns
+        <button onclick="switchTab('audit')" data-tab-btn="audit" class="tab-btn px-3.5 pb-3 text-[13.5px] font-semibold flex items-center gap-2">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+          Audit Trail<span id="audit-count-pill" class="hidden text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500">0</span>
+          <div class="tab-underline" data-underline="audit"></div>
+        </button>
+        <button onclick="switchTab('campaigns')" data-tab-btn="campaigns" class="tab-btn px-3.5 pb-3 text-[13.5px] font-semibold flex items-center gap-2">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
+          Growth<span id="campaigns-count-pill" class="hidden text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-600">0</span>
+          <div class="tab-underline" data-underline="campaigns"></div>
         </button>
       </div>
     </div>
 
-    <!-- ============ TAB: CHECKOUT (cart + audit) ============ -->
-    <div id="tab-checkout">
+    <div class="flex-1 overflow-y-auto">
 
-    <!-- Cart panel -->
-    <div class="p-6">
-      <div class="card p-5">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="text-sm font-bold uppercase tracking-wider text-slate-500 flex items-center gap-2">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
-            </svg>
-            Cart
-          </h2>
-          <span id="cart-status" class="status-pill text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-100 text-slate-600">DRAFT</span>
-        </div>
-
-        <div id="cart-items" class="space-y-2 mb-4 min-h-[52px]"></div>
-
-        <div class="flex items-center justify-between border-t hairline pt-4">
-          <span class="text-sm text-slate-500 font-medium">Total</span>
-          <span id="cart-total" class="text-2xl font-extrabold tracking-tight">₹0.00</span>
-        </div>
-
-        <div id="system-notes" class="mt-3 space-y-2"></div>
-
-        <button id="pay-btn" onclick="triggerCheckout()"
-          class="btn-primary mt-5 w-full py-3.5 rounded-xl font-semibold text-sm text-white flex items-center justify-center gap-2"
-          disabled>
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-          </svg>
-          <span id="pay-btn-label">Pay with Razorpay (Test Mode)</span>
-        </button>
-        <p class="text-[11px] text-center text-slate-400 mt-2.5 flex items-center justify-center gap-1">
-          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 008 4.07M3 15.364c.64-1.319 1-2.8 1-4.364 0-1.457.39-2.823 1.07-4" />
-          </svg>
-          Amounts are re-verified server-side before any charge is created
-        </p>
-      </div>
-    </div>
-
-    <!-- Audit trail panel -->
-    <div class="px-6 pb-6 flex-1 flex flex-col min-h-0">
-      <div class="card flex-1 flex flex-col min-h-0 overflow-hidden">
-        <button onclick="toggleAudit()" class="flex items-center justify-between w-full px-5 py-4 group border-b hairline">
-          <h2 class="text-sm font-bold uppercase tracking-wider text-slate-500 group-hover:text-slate-700 flex items-center gap-2">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            Audit Trail
-          </h2>
-          <div class="flex items-center gap-2">
-            <span id="chain-integrity" class="text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-100 text-slate-400">—</span>
-            <svg id="audit-chevron" class="w-4 h-4 text-slate-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
-            </svg>
+      <div id="tab-checkout" class="p-6">
+        <div class="card p-5">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-[13px] font-bold uppercase tracking-wider text-slate-500">Cart</h2>
+            <span id="cart-status" class="status-pill text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-100 text-slate-600">DRAFT</span>
           </div>
-        </button>
-        <div id="audit-body" class="flex-1 overflow-y-auto px-5 py-3 space-y-1.5 text-xs"></div>
+          <div id="cart-items" class="space-y-2 mb-4 min-h-[56px]"></div>
+          <div class="flex items-center justify-between border-t hairline pt-4">
+            <span class="text-sm text-slate-500 font-medium">Total</span>
+            <span id="cart-total" class="text-[26px] font-extrabold tracking-tight tabular"><span class="number-settle">₹0.00</span></span>
+          </div>
+          <div id="system-notes" class="mt-3 space-y-2"></div>
+          <button id="pay-btn" onclick="triggerCheckout()" class="btn-primary mt-5 w-full py-3.5 rounded-xl font-semibold text-sm text-white flex items-center justify-center gap-2" disabled>
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+            <span id="pay-btn-label">Pay with Razorpay (Test Mode)</span>
+          </button>
+          <p class="text-[11px] text-center text-slate-400 mt-2.5 flex items-center justify-center gap-1.5">
+            <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 008 4.07M3 15.364c.64-1.319 1-2.8 1-4.364 0-1.457.39-2.823 1.07-4" /></svg>
+            Amounts are re-verified server-side before any charge is created
+          </p>
+        </div>
       </div>
+
+      <div id="tab-audit" class="p-6 hidden">
+        <div class="card overflow-hidden">
+          <div class="flex items-center justify-between px-5 py-4 border-b hairline">
+            <h2 class="text-[13px] font-bold uppercase tracking-wider text-slate-500">Hash-Chained Audit Trail</h2>
+            <span id="chain-integrity" class="text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-100 text-slate-400">—</span>
+          </div>
+          <div id="audit-body" class="px-5 py-3 space-y-1.5 text-xs max-h-[70vh] overflow-y-auto"></div>
+        </div>
+      </div>
+
+      <div id="tab-campaigns" class="p-6 hidden space-y-5">
+        <div class="card p-5">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-[13px] font-bold uppercase tracking-wider text-slate-500">Campaign Budget</h2>
+            <button onclick="refreshCampaignStatus()" id="refresh-budget-btn" class="chip-btn text-xs font-semibold text-indigo-600 hover:text-indigo-800 flex items-center gap-1">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+              Refresh
+            </button>
+          </div>
+          <div id="budget-skeleton" class="space-y-3">
+            <div class="skeleton h-4 w-1/2"></div><div class="skeleton h-8 w-full"></div><div class="skeleton h-3 w-2/3"></div>
+          </div>
+          <div id="budget-content" class="hidden">
+            <div class="flex items-end justify-between mb-2">
+              <div>
+                <div class="text-[11px] text-slate-400 font-medium uppercase tracking-wide mb-1">Remaining this period</div>
+                <div class="text-2xl font-extrabold tracking-tight tabular">₹<span id="budget-remaining" class="number-settle">0.00</span></div>
+              </div>
+              <div class="text-right">
+                <div class="text-[11px] text-slate-400 font-medium uppercase tracking-wide mb-1">Active campaigns</div>
+                <div class="text-lg font-bold tabular"><span id="budget-active-count">0</span><span class="text-slate-400 font-medium">/<span id="budget-max-concurrent">0</span></span></div>
+              </div>
+            </div>
+            <div class="progress-track h-2 mt-3"><div id="budget-progress-fill" class="progress-fill h-2" style="width:0%"></div></div>
+            <div class="flex items-center justify-between mt-2 text-[11px] text-slate-400">
+              <span>Committed: ₹<span id="budget-committed" class="tabular">0.00</span></span>
+              <span>Ceiling: ₹<span id="budget-ceiling" class="tabular">0.00</span></span>
+            </div>
+          </div>
+          <div id="budget-empty" class="hidden text-center py-6 text-slate-400 text-sm">No budget initialized yet — run a growth cycle to begin.</div>
+          <button onclick="runCampaignCycle()" id="run-campaign-btn" class="btn-primary mt-5 w-full py-3 rounded-xl font-semibold text-sm text-white flex items-center justify-center gap-2">
+            <svg id="run-campaign-icon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+            <span id="run-campaign-label">Run growth cycle</span>
+          </button>
+        </div>
+
+        <div class="card overflow-hidden">
+          <div class="flex items-center justify-between px-5 py-4 border-b hairline">
+            <h2 class="text-[13px] font-bold uppercase tracking-wider text-slate-500">Proposed Campaigns</h2>
+            <span class="text-[11px] text-slate-400">Most recent cycle</span>
+          </div>
+          <div id="campaigns-list" class="px-5 py-4 space-y-3 max-h-[50vh] overflow-y-auto">
+            <div class="text-center py-8 text-slate-400 text-sm">
+              <svg class="w-8 h-8 mx-auto mb-2 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
+              No campaigns run yet this session
+            </div>
+          </div>
+        </div>
+      </div>
+
     </div>
-
-    </div> <!-- /#tab-checkout -->
-
-    <!-- ============ TAB: CAMPAIGNS ============ -->
-    <div id="tab-campaigns" class="hidden p-6 space-y-6">
-
-      <!-- Budget status card -->
-      <div class="card p-5">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="text-sm font-bold uppercase tracking-wider text-slate-500 flex items-center gap-2">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V6m0 10v2m0-2c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            Campaign Budget
-          </h2>
-          <span id="campaign-period-badge" class="mono text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-500 border hairline">—</span>
-        </div>
-
-        <div class="flex items-end justify-between mb-2">
-          <span class="text-xs text-slate-500 font-medium">Committed spend</span>
-          <span id="budget-numbers" class="mono text-sm font-semibold text-slate-700">₹0.00 / ₹0.00</span>
-        </div>
-        <div class="w-full h-2.5 rounded-full bg-slate-100 overflow-hidden mb-4">
-          <div id="budget-bar-fill" class="h-full rounded-full transition-all duration-300"
-               style="width:0%; background:linear-gradient(90deg,#4f8bfb,#2563eb)"></div>
-        </div>
-
-        <div class="flex items-center justify-between text-sm border-t hairline pt-4">
-          <span class="text-slate-500 font-medium">Active campaigns</span>
-          <span id="budget-active-count" class="font-semibold text-slate-700">0 / 0</span>
-        </div>
-
-        <div class="flex items-center gap-2 mt-5">
-          <button id="run-growth-cycle" onclick="runGrowthCycle()"
-            class="btn-primary flex-1 py-3 rounded-xl font-semibold text-sm text-white flex items-center justify-center gap-2">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
-            <span id="run-growth-cycle-label">Run growth cycle</span>
-          </button>
-          <button onclick="refreshCampaignStatus()"
-            class="chip-btn px-3.5 py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 border hairline">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-          </button>
-        </div>
-        <p class="text-[11px] text-center text-slate-400 mt-2.5">
-          Every reservation is atomic — two campaigns racing for the same budget can never jointly overspend it
-        </p>
-      </div>
-
-      <!-- Decided campaigns list -->
-      <div class="card flex-1 flex flex-col min-h-0 overflow-hidden">
-        <div class="flex items-center justify-between px-5 py-4 border-b hairline">
-          <h2 class="text-sm font-bold uppercase tracking-wider text-slate-500 flex items-center gap-2">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
-            </svg>
-            Decided Campaigns
-          </h2>
-        </div>
-        <div id="campaign-list" class="px-5 py-4 space-y-2.5"></div>
-      </div>
-
-    </div> <!-- /#tab-campaigns -->
-
   </div>
 </div>
 
@@ -420,120 +248,79 @@
 const API_BASE = window.location.origin;
 let cartId = null;
 let pendingFailure = null;
-let auditVisible = true;
-let razorpayKeyId = "rzp_test_xxxxxxxxxxxxxx"; // test-mode key id, safe to expose client-side
+let razorpayKeyId = "rzp_test_xxxxxxxxxxxxxx";
+let activeTab = 'checkout';
 
-// ---------- small DOM helpers ----------
-function el(tag, cls, html) {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  if (html !== undefined) e.innerHTML = html;
-  return e;
-}
-function escapeHtml(s) {
-  const d = document.createElement('div');
-  d.innerText = s;
-  return d.innerHTML;
-}
-function timeAgo(ts) {
-  const diff = Math.max(0, Date.now()/1000 - ts);
-  if (diff < 2) return 'just now';
-  if (diff < 60) return `${Math.floor(diff)}s ago`;
-  if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
-  return `${Math.floor(diff/3600)}h ago`;
+function el(tag, cls, html) { const e = document.createElement(tag); if (cls) e.className = cls; if (html !== undefined) e.innerHTML = html; return e; }
+function escapeHtml(s) { const d = document.createElement('div'); d.innerText = s; return d.innerHTML; }
+function timeAgo(ts) { const diff = Math.max(0, Date.now()/1000 - ts); if (diff < 2) return 'just now'; if (diff < 60) return `${Math.floor(diff)}s ago`; if (diff < 3600) return `${Math.floor(diff/60)}m ago`; return `${Math.floor(diff/3600)}h ago`; }
+function fmtMoney(v) { const n = parseFloat(v); if (Number.isNaN(n)) return '0.00'; return n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function setNumberText(elementId, text) { const target = document.getElementById(elementId); if (!target) return; if (target.textContent === text) return; target.textContent = text; target.classList.remove('number-settle'); void target.offsetWidth; target.classList.add('number-settle'); }
+
+function switchTab(tab) {
+  activeTab = tab;
+  ['checkout', 'audit', 'campaigns'].forEach(t => {
+    document.getElementById(`tab-${t}`).classList.toggle('hidden', t !== tab);
+    const btn = document.querySelector(`[data-tab-btn="${t}"]`);
+    btn.dataset.active = (t === tab).toString();
+    document.querySelector(`[data-underline="${t}"]`).style.opacity = (t === tab) ? '1' : '0';
+  });
+  if (tab === 'campaigns') refreshCampaignStatus();
 }
 
-// ---------- toasts ----------
 function toast(message, kind = 'info') {
-  const palette = {
-    info:    { bg:'bg-slate-800', icon:'ℹ' },
-    success: { bg:'bg-emerald-600', icon:'✓' },
-    error:   { bg:'bg-rose-600', icon:'⚠' },
-    warn:    { bg:'bg-amber-500', icon:'⚠' },
-  }[kind] || { bg:'bg-slate-800', icon:'ℹ' };
-
-  const t = el('div', `toast ${palette.bg} text-white text-sm font-medium px-4 py-3 rounded-xl flex items-center gap-2 max-w-xs`);
-  t.innerHTML = `<span>${palette.icon}</span><span>${escapeHtml(message)}</span>`;
+  const palette = { info:{bg:'bg-slate-800',icon:'ℹ'}, success:{bg:'bg-emerald-600',icon:'✓'}, error:{bg:'bg-rose-600',icon:'⚠'}, warn:{bg:'bg-amber-500',icon:'⚠'} }[kind] || { bg:'bg-slate-800', icon:'ℹ' };
+  const t = el('div', `toast ${palette.bg} text-white text-sm font-medium px-4 py-3 rounded-xl flex items-center gap-2.5`);
+  t.innerHTML = `<span class="text-[15px] leading-none">${palette.icon}</span><span class="leading-snug">${escapeHtml(message)}</span>`;
   document.getElementById('toast-stack').appendChild(t);
-  setTimeout(() => {
-    t.style.transition = 'opacity .25s ease, transform .25s ease';
-    t.style.opacity = '0';
-    t.style.transform = 'translateX(20px)';
-    setTimeout(() => t.remove(), 250);
-  }, 3200);
+  setTimeout(() => { t.style.transition = 'opacity .25s ease, transform .25s ease'; t.style.opacity = '0'; t.style.transform = 'translateX(24px)'; setTimeout(() => t.remove(), 250); }, 3400);
 }
 
-// ---------- chat ----------
 function appendMessage(role, text) {
   const log = document.getElementById('chat-log');
   const wrap = el('div', `msg-enter flex ${role === 'user' ? 'justify-end' : 'justify-start'} items-end gap-2`);
-
-  if (role !== 'user') {
-    const avatar = el('div',
-      'w-7 h-7 shrink-0 rounded-full flex items-center justify-center text-[10px] font-bold text-white',
-      'AI');
-    avatar.style.background = 'linear-gradient(135deg,#4f8bfb,#2563eb)';
-    wrap.appendChild(avatar);
-  }
-
-  const bubble = el('div',
-    `max-w-[80%] rounded-2xl px-4 py-2.5 text-[13.5px] leading-relaxed shadow-sm ${
-      role === 'user'
-        ? 'text-white rounded-br-md'
-        : 'bg-white border hairline text-slate-800 rounded-bl-md'
-    }`,
-    escapeHtml(text)
-  );
-  if (role === 'user') {
-    bubble.style.background = 'linear-gradient(180deg,#4f8bfb,#2563eb)';
-  }
-  wrap.appendChild(bubble);
-  log.appendChild(wrap);
-  log.scrollTop = log.scrollHeight;
+  if (role !== 'user') { const avatar = el('div', 'brand-mark w-7 h-7 shrink-0 rounded-lg flex items-center justify-center text-[10px] font-bold text-white', 'AT'); wrap.appendChild(avatar); }
+  const bubble = el('div', `max-w-[82%] rounded-2xl px-4 py-2.5 text-[13.5px] leading-relaxed shadow-sm ${role === 'user' ? 'text-white rounded-br-md' : 'bg-white border hairline text-slate-800 rounded-bl-md'}`, escapeHtml(text));
+  if (role === 'user') bubble.style.background = 'linear-gradient(180deg,#4f46e5,#4338ca)';
+  wrap.appendChild(bubble); log.appendChild(wrap); log.scrollTop = log.scrollHeight;
 }
 
 function showTyping() {
   const log = document.getElementById('chat-log');
-  const wrap = el('div', 'msg-enter flex justify-start items-end gap-2');
-  wrap.id = 'typing-indicator';
-  const avatar = el('div', 'w-7 h-7 shrink-0 rounded-full flex items-center justify-center text-[10px] font-bold text-white', 'AI');
-  avatar.style.background = 'linear-gradient(135deg,#4f8bfb,#2563eb)';
-  const bubble = el('div', 'bg-white border hairline rounded-2xl rounded-bl-md px-4 py-3 flex items-center gap-1');
-  for (let i = 0; i < 3; i++) {
-    const dot = el('span', 'typing-dot w-1.5 h-1.5 rounded-full bg-slate-400 inline-block');
-    dot.style.animationDelay = `${i * 0.15}s`;
-    bubble.appendChild(dot);
-  }
-  wrap.appendChild(avatar);
-  wrap.appendChild(bubble);
-  log.appendChild(wrap);
-  log.scrollTop = log.scrollHeight;
+  const wrap = el('div', 'msg-enter flex justify-start items-end gap-2'); wrap.id = 'typing-indicator';
+  const avatar = el('div', 'brand-mark w-7 h-7 shrink-0 rounded-lg flex items-center justify-center text-[10px] font-bold text-white', 'AT');
+  const bubble = el('div', 'bg-white border hairline rounded-2xl rounded-bl-md px-4 py-3 flex items-center gap-1.5');
+  for (let i = 0; i < 3; i++) { const dot = el('span', 'typing-dot w-1.5 h-1.5 rounded-full bg-slate-400 inline-block'); dot.style.animationDelay = `${i * 0.15}s`; bubble.appendChild(dot); }
+  wrap.appendChild(avatar); wrap.appendChild(bubble); log.appendChild(wrap); log.scrollTop = log.scrollHeight;
 }
-function hideTyping() {
-  document.getElementById('typing-indicator')?.remove();
+function hideTyping() { document.getElementById('typing-indicator')?.remove(); }
+
+function setSendLoading(loading) {
+  const btn = document.querySelector('#chat-form button[type="submit"]');
+  const label = document.getElementById('send-label'); const icon = document.getElementById('send-icon');
+  btn.disabled = loading; label.textContent = loading ? 'Sending' : 'Send';
+  icon.innerHTML = loading ? '<circle class="spinner" style="transform-origin:12px 12px" cx="12" cy="12" r="9" stroke-dasharray="42" stroke-dashoffset="14" fill="none"/>' : '<path stroke-linecap="round" stroke-linejoin="round" d="M13 5l7 7-7 7M5 12h14" />';
 }
 
-// ---------- controls ----------
 function armFailure(mode) {
   pendingFailure = mode;
   const badge = document.getElementById('armed-badge');
-  badge.textContent = `⚠ ${mode} armed for next message`;
-  badge.classList.remove('hidden');
+  badge.textContent = `Armed: ${mode} on next message`; badge.classList.remove('hidden');
   toast(`Simulated "${mode}" failure armed for your next message`, 'warn');
 }
 
 function resetSession() {
-  cartId = null;
-  pendingFailure = null;
+  cartId = null; pendingFailure = null;
   document.getElementById('chat-log').innerHTML = '';
   document.getElementById('cart-items').innerHTML = '';
-  document.getElementById('cart-total').textContent = '₹0.00';
+  document.getElementById('cart-total').innerHTML = '<span class="number-settle">₹0.00</span>';
   setStatusPill('DRAFT');
   document.getElementById('cart-id-badge').textContent = 'no session';
   document.getElementById('system-notes').innerHTML = '';
   document.getElementById('audit-body').innerHTML = emptyAuditState();
   document.getElementById('chain-integrity').textContent = '—';
   document.getElementById('chain-integrity').className = 'text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-100 text-slate-400';
+  document.getElementById('audit-count-pill').classList.add('hidden');
   document.getElementById('pay-btn').disabled = true;
   document.getElementById('armed-badge').classList.add('hidden');
   appendMessage('assistant', "Hi! I'm your shopping assistant. What can I help you find today?");
@@ -541,383 +328,191 @@ function resetSession() {
 
 function emptyAuditState() {
   return `<div class="text-center py-8 text-slate-400 text-sm">
-    <svg class="w-8 h-8 mx-auto mb-2 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-      <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-    </svg>
-    No audit entries yet
-  </div>`;
+    <svg class="w-8 h-8 mx-auto mb-2 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+    No audit entries yet</div>`;
 }
 
-const STATUS_STYLES = {
-  DRAFT:          'bg-slate-100 text-slate-600',
-  PENDING_AUDIT:  'bg-blue-50 text-blue-700 ring-1 ring-blue-200',
-  AUDIT_FAILED:   'bg-rose-50 text-rose-700 ring-1 ring-rose-200',
-  AUDITED_OK:     'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200',
-  ORDER_CREATED:  'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200',
-  PAYMENT_FAILED: 'bg-rose-50 text-rose-700 ring-1 ring-rose-200',
-  RECOVERED:      'bg-amber-50 text-amber-700 ring-1 ring-amber-200',
-  COMPLETED:      'bg-emerald-600 text-white',
-};
+const STATUS_STYLES = { DRAFT:'bg-slate-100 text-slate-600', PENDING_AUDIT:'bg-blue-50 text-blue-700 ring-1 ring-blue-200', AUDIT_FAILED:'bg-rose-50 text-rose-700 ring-1 ring-rose-200', AUDITED_OK:'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200', ORDER_CREATED:'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200', PAYMENT_FAILED:'bg-rose-50 text-rose-700 ring-1 ring-rose-200', RECOVERED:'bg-amber-50 text-amber-700 ring-1 ring-amber-200', COMPLETED:'bg-indigo-600 text-white' };
 
 function setStatusPill(status) {
   const statusEl = document.getElementById('cart-status');
   statusEl.textContent = status;
-  statusEl.className = `status-pill number-pop text-xs font-semibold px-2.5 py-1 rounded-full ${STATUS_STYLES[status] || 'bg-slate-100 text-slate-600'}`;
+  statusEl.className = `status-pill text-xs font-semibold px-2.5 py-1 rounded-full ${STATUS_STYLES[status] || 'bg-slate-100 text-slate-600'}`;
 }
 
 function renderCart(payload) {
   document.getElementById('cart-id-badge').textContent = payload.cart_id.slice(0, 16) + '…';
   setStatusPill(payload.cart_status);
-
-  const itemsWrap = document.getElementById('cart-items');
-  itemsWrap.innerHTML = '';
+  const itemsWrap = document.getElementById('cart-items'); itemsWrap.innerHTML = '';
   if (!payload.line_items.length) {
     itemsWrap.appendChild(el('div', 'flex flex-col items-center justify-center py-6 text-slate-400',
-      `<svg class="w-6 h-6 mb-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-         <path stroke-linecap="round" stroke-linejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17"/>
-       </svg><span class="text-sm">Cart is empty</span>`));
+      `<svg class="w-6 h-6 mb-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17"/></svg><span class="text-sm">Cart is empty</span>`));
   }
   payload.line_items.forEach((li, i) => {
-    const row = el('div', 'row-enter flex items-center justify-between text-sm bg-slate-50 rounded-xl px-3.5 py-2.5 border hairline');
-    row.style.animationDelay = `${i * 0.04}s`;
+    const row = el('div', 'row-enter flex items-center justify-between text-sm bg-[var(--canvas-alt)] rounded-xl px-3.5 py-2.5 border hairline');
+    row.style.animationDelay = `${i * 0.045}s`;
     const left = el('div', '');
     left.appendChild(el('div', 'font-semibold flex items-center gap-2 text-slate-800',
       `${escapeHtml(li.name)} ${li.added_by_upsell ? '<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-bold">UPSELL</span>' : ''}`));
     left.appendChild(el('div', 'text-xs text-slate-400 mono mt-0.5', `${li.sku} · qty ${li.quantity}${li.discount_pct > 0 ? ` · -${li.discount_pct}%` : ''}`));
-    const right = el('div', 'mono text-sm font-semibold text-slate-700', `₹${li.unit_price}`);
-    row.appendChild(left);
-    row.appendChild(right);
-    itemsWrap.appendChild(row);
+    const right = el('div', 'mono text-sm font-semibold text-slate-700 tabular', `₹${fmtMoney(li.unit_price)}`);
+    row.appendChild(left); row.appendChild(right); itemsWrap.appendChild(row);
   });
-
   const totalEl = document.getElementById('cart-total');
-  totalEl.textContent = `₹${payload.computed_total}`;
-  totalEl.classList.remove('number-pop');
-  void totalEl.offsetWidth;
-  totalEl.classList.add('number-pop');
-
-  const notesWrap = document.getElementById('system-notes');
-  notesWrap.innerHTML = '';
+  const newTotalText = `₹${fmtMoney(payload.computed_total)}`;
+  if (totalEl.textContent.trim() !== newTotalText) totalEl.innerHTML = `<span class="number-settle">${newTotalText}</span>`;
+  const notesWrap = document.getElementById('system-notes'); notesWrap.innerHTML = '';
   for (const note of (payload.system_notes || [])) {
     const isReject = /can't proceed|failed|couldn't reach|halted/i.test(note);
-    notesWrap.appendChild(el('div',
-      `note-enter text-xs rounded-xl px-3.5 py-2.5 border flex items-start gap-2 ${
-        isReject ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`,
+    notesWrap.appendChild(el('div', `note-enter text-xs rounded-xl px-3.5 py-2.5 border flex items-start gap-2 ${isReject ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`,
       `<span class="mt-0.5">${isReject ? '⛔' : '⚠️'}</span><span class="leading-relaxed">${escapeHtml(note)}</span>`));
     if (isReject) toast(note.split('\n')[0], 'error');
   }
-
-  const payBtn = document.getElementById('pay-btn');
-  const payLabel = document.getElementById('pay-btn-label');
+  const payBtn = document.getElementById('pay-btn'); const payLabel = document.getElementById('pay-btn-label');
   payBtn.disabled = !payload.order_id;
   if (payload.order_id) {
     window._activeOrder = { orderId: payload.order_id, amount: payload.computed_total, cartId: payload.cart_id };
-    payLabel.textContent = `Pay ₹${payload.computed_total} with Razorpay`;
+    payLabel.textContent = `Pay ₹${fmtMoney(payload.computed_total)} with Razorpay`;
     payBtn.classList.add('ring-pulse');
-  } else {
-    payLabel.textContent = 'Pay with Razorpay (Test Mode)';
-    payBtn.classList.remove('ring-pulse');
-  }
+  } else { payLabel.textContent = 'Pay with Razorpay (Test Mode)'; payBtn.classList.remove('ring-pulse'); }
 }
 
-// ---------- tabs ----------
-function switchTab(name) {
-  const checkoutTab = document.getElementById('tab-checkout');
-  const campaignsTab = document.getElementById('tab-campaigns');
-  const checkoutBtn = document.getElementById('tab-btn-checkout');
-  const campaignsBtn = document.getElementById('tab-btn-campaigns');
-
-  const activeCls = ['bg-white', 'text-slate-800', 'shadow-sm'];
-  const inactiveCls = ['text-slate-500', 'hover:text-slate-700'];
-
-  if (name === 'campaigns') {
-    checkoutTab.classList.add('hidden');
-    campaignsTab.classList.remove('hidden');
-    campaignsBtn.classList.add(...activeCls);
-    campaignsBtn.classList.remove(...inactiveCls);
-    checkoutBtn.classList.remove(...activeCls);
-    checkoutBtn.classList.add(...inactiveCls);
-    refreshCampaignStatus();
-  } else {
-    campaignsTab.classList.add('hidden');
-    checkoutTab.classList.remove('hidden');
-    checkoutBtn.classList.add(...activeCls);
-    checkoutBtn.classList.remove(...inactiveCls);
-    campaignsBtn.classList.remove(...activeCls);
-    campaignsBtn.classList.add(...inactiveCls);
-  }
-}
-
-// ---------- campaigns ----------
-function currentPeriodLabel() {
-  const now = new Date();
-  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
-}
-
-const CAMPAIGN_STATUS_STYLES = {
-  ACTIVE:   'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200',
-  APPROVED: 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200',
-  REJECTED: 'bg-rose-50 text-rose-700 ring-1 ring-rose-200',
-  EXPIRED:  'bg-slate-100 text-slate-500 ring-1 ring-slate-200',
-};
-
-function emptyCampaignState() {
-  return `<div class="text-center py-8 text-slate-400 text-sm">
-    <svg class="w-8 h-8 mx-auto mb-2 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-      <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-    </svg>
-    No campaigns decided yet this period
-  </div>`;
-}
-
-async function refreshCampaignStatus() {
-  const period = currentPeriodLabel();
-  document.getElementById('campaign-period-badge').textContent = period;
-
-  try {
-    const res = await fetch(`${API_BASE}/api/campaigns/status?period_label=${period}`);
-    if (!res.ok) return;
-    const data = await res.json();
-
-    document.getElementById('campaign-period-badge').textContent = data.period_label || period;
-    const budgetNumbersEl = document.getElementById('budget-numbers');
-    budgetNumbersEl.textContent = `₹${data.committed_spend} / ₹${data.max_discount_spend}`;
-    budgetNumbersEl.classList.remove('number-pop');
-    void budgetNumbersEl.offsetWidth;
-    budgetNumbersEl.classList.add('number-pop');
-
-    const pct = Math.min(100, (parseFloat(data.committed_spend) / parseFloat(data.max_discount_spend || 1)) * 100);
-    document.getElementById('budget-bar-fill').style.width = `${pct}%`;
-
-    document.getElementById('budget-active-count').textContent =
-      `${data.active_count} / ${data.max_concurrent_campaigns}`;
-
-    renderCampaignList(data.decided_campaigns || []);
-  } catch (err) {
-    toast('Could not reach campaign status endpoint', 'error');
-  }
-}
-
-function renderCampaignList(campaigns) {
-  const list = document.getElementById('campaign-list');
-  list.innerHTML = '';
-  if (!campaigns.length) {
-    list.innerHTML = emptyCampaignState();
-    return;
-  }
-  campaigns.forEach((c, i) => {
-    const row = el('div', 'row-enter border hairline rounded-xl px-4 py-3 bg-white');
-    row.style.animationDelay = `${i * 0.04}s`;
-    const pillCls = CAMPAIGN_STATUS_STYLES[c.status] || 'bg-slate-100 text-slate-600';
-    row.innerHTML = `
-      <div class="flex items-center justify-between gap-2">
-        <span class="font-semibold text-sm text-slate-800 truncate">${escapeHtml(c.name || c.campaign_id)}</span>
-        <span class="status-pill text-xs font-semibold px-2.5 py-1 rounded-full ${pillCls}">${c.status}</span>
-      </div>
-      <div class="mono text-xs text-slate-400 mt-1">
-        ₹${c.reserved_amount || '0.00'} · ${escapeHtml(c.period_label || '')}
-      </div>
-      ${
-        c.status === 'REJECTED' && c.gatekeeper_notes && c.gatekeeper_notes.length
-          ? `<div class="note-enter mt-2 text-xs rounded-lg px-3 py-2 bg-rose-50 text-rose-700 border border-rose-200 leading-relaxed">
-               ${c.gatekeeper_notes.map(n => `⛔ ${escapeHtml(n)}`).join('<br/>')}
-             </div>`
-          : ''
-      }
-    `;
-    list.appendChild(row);
-  });
-}
-
-async function runGrowthCycle() {
-  const btn = document.getElementById('run-growth-cycle');
-  const label = document.getElementById('run-growth-cycle-label');
-  btn.disabled = true;
-  const prevLabel = label.textContent;
-  label.textContent = 'Running…';
-
-  try {
-    const period = currentPeriodLabel();
-    const res = await fetch(`${API_BASE}/api/campaigns/run`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ period_label: period }),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      toast(err.detail || 'Growth cycle failed', 'error');
-    } else {
-      toast('Growth cycle complete', 'success');
-    }
-    await refreshCampaignStatus();
-  } catch (err) {
-    toast('Connection error running growth cycle', 'error');
-  } finally {
-    btn.disabled = false;
-    label.textContent = prevLabel;
-  }
-}
-
-// ---------- audit ----------
-const EVENT_ICON = {
-  USER_MESSAGE: '💬', UPSELL_PROPOSED: '🎯', UPSELL_SKIPPED_INELIGIBLE: '🚫',
-  CART_SUBMITTED_FOR_AUDIT: '📤', GATEKEEPER_VERDICT_APPROVED: '✅', GATEKEEPER_VERDICT_REJECTED: '❌',
-  USER_NOTIFIED_REJECTION: '📣', RAZORPAY_ORDER_CREATED: '💳', RAZORPAY_ORDER_FAILED: '⚠️',
-  PAYMENT_RECOVERY_ENTERED: '🛟', USER_NOTIFIED_RECOVERY: '📣', PAYMENT_VERIFIED: '🔐',
-  PAYMENT_VERIFICATION_FAILED: '🔓', SIGNATURE_VERIFICATION_ORDER_MISMATCH: '⚠️',
-};
+const EVENT_ICON = { USER_MESSAGE:'💬', UPSELL_PROPOSED:'🎯', UPSELL_SKIPPED_INELIGIBLE:'🚫', UPSELL_REJECTED_UNKNOWN_SKU:'🚫', CART_SUBMITTED_FOR_AUDIT:'📤', GATEKEEPER_VERDICT_APPROVED:'✅', GATEKEEPER_VERDICT_REJECTED:'❌', USER_NOTIFIED_REJECTION:'📣', RAZORPAY_ORDER_CREATED:'💳', RAZORPAY_ORDER_FAILED:'⚠️', RAZORPAY_RATE_LIMITED:'⏳', PAYMENT_RECOVERY_ENTERED:'🛟', USER_NOTIFIED_RECOVERY:'📣', PAYMENT_VERIFIED:'🔐', PAYMENT_VERIFICATION_FAILED:'🔓', SIGNATURE_VERIFICATION_ORDER_MISMATCH:'⚠️', EXTERNAL_AGENT_PROPOSAL_RECEIVED:'🤖', GRAPH_INVOCATION_FAILED:'💥', LLM_TURN_FAILED:'🧠' };
 
 async function refreshAudit() {
   if (!cartId) return;
-  const res = await fetch(`${API_BASE}/api/audit/${cartId}`);
-  if (!res.ok) return;
-  const data = await res.json();
+  try {
+    const res = await fetch(`${API_BASE}/api/audit/${cartId}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const badge = document.getElementById('chain-integrity');
+    badge.textContent = data.chain_intact ? '✓ Chain intact' : '✗ Tampering detected';
+    badge.className = `text-xs font-semibold px-2.5 py-1 rounded-full ${data.chain_intact ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200' : 'bg-rose-50 text-rose-700 ring-1 ring-rose-200'}`;
+    const countPill = document.getElementById('audit-count-pill'); countPill.textContent = data.entry_count; countPill.classList.remove('hidden');
+    const body = document.getElementById('audit-body'); body.innerHTML = '';
+    if (!data.entries.length) { body.innerHTML = emptyAuditState(); return; }
+    data.entries.slice().reverse().forEach((entry, i) => {
+      const row = el('div', 'list-row row-enter border hairline rounded-xl px-3 py-2.5 bg-white');
+      row.style.animationDelay = `${Math.min(i, 6) * 0.03}s`;
+      const icon = EVENT_ICON[entry.event_type] || '📋';
+      row.innerHTML = `<div class="flex items-center justify-between gap-2"><div class="flex items-center gap-2 min-w-0"><span>${icon}</span><span class="font-semibold text-slate-700 truncate">${entry.event_type}</span></div><span class="text-slate-400 shrink-0 mono text-[10px]">#${entry.seq}</span></div>
+        <div class="mono text-slate-400 text-[10px] mt-1 flex items-center gap-2"><span>${entry.entry_hash.slice(0,14)}…</span><span>·</span><span>${timeAgo(entry.timestamp)}</span></div>
+        <div class="mono text-slate-500 text-[10.5px] mt-1.5 truncate">${escapeHtml(JSON.stringify(entry.payload))}</div>`;
+      body.appendChild(row);
+    });
+  } catch (e) { console.warn('audit refresh failed', e); }
+}
 
-  const badge = document.getElementById('chain-integrity');
-  badge.textContent = data.chain_intact ? '✓ Chain intact' : '✗ Tampering detected';
-  badge.className = `text-xs font-semibold px-2.5 py-1 rounded-full ${
-    data.chain_intact ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200' : 'bg-rose-50 text-rose-700 ring-1 ring-rose-200'}`;
+async function refreshCampaignStatus() {
+  const skeleton = document.getElementById('budget-skeleton'); const content = document.getElementById('budget-content');
+  const empty = document.getElementById('budget-empty'); const refreshBtn = document.getElementById('refresh-budget-btn');
+  refreshBtn.classList.add('opacity-50', 'pointer-events-none');
+  skeleton.classList.remove('hidden'); content.classList.add('hidden'); empty.classList.add('hidden');
+  try {
+    const res = await fetch(`${API_BASE}/api/campaigns/status`);
+    skeleton.classList.add('hidden');
+    if (res.status === 404) { empty.classList.remove('hidden'); return; }
+    if (!res.ok) throw new Error('status fetch failed');
+    const data = await res.json();
+    content.classList.remove('hidden');
+    setNumberText('budget-remaining', fmtMoney(data.remaining_budget));
+    document.getElementById('budget-active-count').textContent = data.active_count;
+    document.getElementById('budget-max-concurrent').textContent = data.max_concurrent_campaigns;
+    document.getElementById('budget-committed').textContent = fmtMoney(data.committed_spend);
+    document.getElementById('budget-ceiling').textContent = fmtMoney(data.max_discount_spend);
+    const pct = Math.min(100, (parseFloat(data.committed_spend) / parseFloat(data.max_discount_spend)) * 100 || 0);
+    document.getElementById('budget-progress-fill').style.width = `${pct}%`;
+  } catch (e) {
+    skeleton.classList.add('hidden'); empty.classList.remove('hidden');
+    document.getElementById('budget-empty').textContent = 'Could not load budget status.';
+  } finally { refreshBtn.classList.remove('opacity-50', 'pointer-events-none'); }
+}
 
-  const body = document.getElementById('audit-body');
-  body.innerHTML = '';
-  if (!data.entries.length) {
-    body.innerHTML = emptyAuditState();
-    return;
+const CAMPAIGN_STATUS_STYLES = { ACTIVE:'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200', REJECTED:'bg-rose-50 text-rose-700 ring-1 ring-rose-200', PROPOSED:'bg-slate-100 text-slate-600', EXPIRED:'bg-amber-50 text-amber-700 ring-1 ring-amber-200' };
+
+function renderCampaigns(campaigns) {
+  const listWrap = document.getElementById('campaigns-list'); const countPill = document.getElementById('campaigns-count-pill');
+  listWrap.innerHTML = '';
+  if (!campaigns.length) {
+    listWrap.innerHTML = `<div class="text-center py-8 text-slate-400 text-sm"><svg class="w-8 h-8 mx-auto mb-2 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>No campaigns run yet this session</div>`;
+    countPill.classList.add('hidden'); return;
   }
-  data.entries.slice().reverse().forEach((entry, i) => {
-    const row = el('div', 'audit-row row-enter border hairline rounded-xl px-3 py-2.5 bg-white');
-    row.style.animationDelay = `${Math.min(i, 6) * 0.03}s`;
-    const icon = EVENT_ICON[entry.event_type] || '📋';
-    row.innerHTML = `
-      <div class="flex items-center justify-between gap-2">
-        <div class="flex items-center gap-2 min-w-0">
-          <span>${icon}</span>
-          <span class="font-semibold text-slate-700 truncate">${entry.event_type}</span>
-        </div>
-        <span class="text-slate-400 shrink-0 mono text-[10px]">#${entry.seq}</span>
-      </div>
-      <div class="mono text-slate-400 text-[10px] mt-1 flex items-center gap-2">
-        <span>${entry.entry_hash.slice(0,14)}…</span>
-        <span>·</span>
-        <span>${timeAgo(entry.timestamp)}</span>
-      </div>
-      <div class="mono text-slate-500 text-[10.5px] mt-1.5 truncate">${escapeHtml(JSON.stringify(entry.payload))}</div>
-    `;
-    body.appendChild(row);
+  countPill.textContent = campaigns.length; countPill.classList.remove('hidden');
+  campaigns.forEach((c, i) => {
+    const card = el('div', 'row-enter border hairline rounded-xl p-4 bg-white');
+    card.style.animationDelay = `${i * 0.06}s`;
+    const statusClass = CAMPAIGN_STATUS_STYLES[c.status] || 'bg-slate-100 text-slate-600';
+    const notesHtml = (c.gatekeeper_notes || []).length
+      ? `<div class="mt-2 space-y-1">${c.gatekeeper_notes.map(n => `<div class="text-[11.5px] text-rose-600 bg-rose-50 rounded-lg px-2.5 py-1.5 flex items-start gap-1.5"><span class="mt-0.5">⛔</span><span>${escapeHtml(n)}</span></div>`).join('')}</div>` : '';
+    card.innerHTML = `<div class="flex items-start justify-between gap-3 mb-1.5"><div><div class="font-semibold text-sm text-slate-800">${escapeHtml(c.target_sku)}</div><div class="text-[11.5px] text-slate-400 mt-0.5">${c.discount_pct}% off · ${c.duration_hours}h window</div></div><span class="status-pill text-[11px] font-semibold px-2.5 py-1 rounded-full shrink-0 ${statusClass}">${c.status}</span></div>
+      <div class="text-[12.5px] text-slate-600 leading-relaxed mt-2">${escapeHtml(c.rationale)}</div>${notesHtml}`;
+    listWrap.appendChild(card);
   });
 }
 
-function toggleAudit() {
-  auditVisible = !auditVisible;
-  document.getElementById('audit-body').style.display = auditVisible ? '' : 'none';
-  document.getElementById('audit-chevron').style.transform = auditVisible ? 'rotate(0deg)' : 'rotate(-90deg)';
+async function runCampaignCycle() {
+  const btn = document.getElementById('run-campaign-btn'); const label = document.getElementById('run-campaign-label'); const icon = document.getElementById('run-campaign-icon');
+  btn.disabled = true; label.textContent = 'Running cycle…';
+  icon.innerHTML = '<circle class="spinner" style="transform-origin:12px 12px" cx="12" cy="12" r="9" stroke-dasharray="42" stroke-dashoffset="14" fill="none"/>';
+  try {
+    const res = await fetch(`${API_BASE}/api/campaigns/run`, { method: 'POST' });
+    if (!res.ok) { const errPayload = await res.json().catch(() => ({})); toast(errPayload.detail || 'Campaign cycle failed to run', 'error'); return; }
+    const data = await res.json();
+    renderCampaigns(data.campaigns);
+    toast(`${data.activated} activated, ${data.rejected} rejected this cycle`, data.activated > 0 ? 'success' : 'info');
+    await refreshCampaignStatus();
+  } catch (e) { toast('Connection error while running growth cycle', 'error'); }
+  finally { btn.disabled = false; label.textContent = 'Run growth cycle'; icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />'; }
 }
 
-// ---------- networking ----------
 async function sendMessage(message) {
-  appendMessage('user', message);
-  showTyping();
-
+  appendMessage('user', message); showTyping(); setSendLoading(true);
   const body = { cart_id: cartId, message };
-  if (pendingFailure) {
-    body.simulate_failure = pendingFailure;
-    pendingFailure = null;
-    document.getElementById('armed-badge').classList.add('hidden');
-  }
-
+  if (pendingFailure) { body.simulate_failure = pendingFailure; pendingFailure = null; document.getElementById('armed-badge').classList.add('hidden'); }
   try {
-    const res = await fetch(`${API_BASE}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    const res = await fetch(`${API_BASE}/api/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const payload = await res.json();
-    hideTyping();
-
-    if (!res.ok) {
-      appendMessage('assistant', `⚠ ${payload.detail || 'Something went wrong.'}`);
-      toast(payload.detail || 'Request failed', 'error');
-      return;
-    }
-
-    cartId = payload.cart_id;
-    appendMessage('assistant', payload.assistant_message);
-    renderCart(payload);
-    await refreshAudit();
+    hideTyping(); setSendLoading(false);
+    if (!res.ok) { appendMessage('assistant', `⚠ ${payload.detail || 'Something went wrong.'}`); toast(payload.detail || 'Request failed', 'error'); return; }
+    cartId = payload.cart_id; appendMessage('assistant', payload.assistant_message); renderCart(payload); await refreshAudit();
   } catch (err) {
-    hideTyping();
-    appendMessage('assistant', `⚠ Connection error: ${err.message}`);
-    toast('Connection error — is the API running?', 'error');
+    hideTyping(); setSendLoading(false);
+    appendMessage('assistant', `⚠ Connection error: ${err.message}`); toast('Connection error — is the API running?', 'error');
+    document.getElementById('conn-dot').className = 'w-1.5 h-1.5 rounded-full bg-rose-500 inline-block';
+    document.getElementById('conn-label').textContent = 'Disconnected';
   }
 }
 
 function triggerCheckout() {
-  const order = window._activeOrder;
-  if (!order) return;
-
+  const order = window._activeOrder; if (!order) return;
   const options = {
-    key: razorpayKeyId,
-    amount: Math.round(parseFloat(order.amount) * 100),
-    currency: 'INR',
-    name: 'AgenticTrade Demo',
-    description: 'Test-mode checkout',
-    order_id: order.orderId,
-    theme: { color: '#2563eb' },
+    key: razorpayKeyId, amount: Math.round(parseFloat(order.amount) * 100), currency: 'INR',
+    name: 'AgenticTrade', description: 'Test-mode checkout', order_id: order.orderId, theme: { color: '#4338ca' },
     handler: async function (response) {
       try {
-        const res = await fetch(`${API_BASE}/api/checkout/verify`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            cart_id: order.cartId,
-            razorpay_order_id: response.razorpay_order_id,
-            razorpay_payment_id: response.razorpay_payment_id,
-            razorpay_signature: response.razorpay_signature,
-          }),
-        });
+        const res = await fetch(`${API_BASE}/api/checkout/verify`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cart_id: order.cartId, razorpay_order_id: response.razorpay_order_id, razorpay_payment_id: response.razorpay_payment_id, razorpay_signature: response.razorpay_signature }) });
         const data = await res.json();
-        if (data.verified) {
-          appendMessage('assistant', '✅ Payment verified — thank you! Your order is confirmed.');
-          toast('Payment verified successfully', 'success');
-        } else {
-          appendMessage('assistant', '⚠ Payment signature could not be verified. No funds captured.');
-          toast('Signature verification failed', 'error');
-        }
-        setStatusPill(data.cart_status);
-        await refreshAudit();
-      } catch (e) {
-        toast('Verification request failed', 'error');
-      }
+        if (data.verified) { appendMessage('assistant', '✅ Payment verified — thank you! Your order is confirmed.'); toast('Payment verified successfully', 'success'); }
+        else { appendMessage('assistant', '⚠ Payment signature could not be verified. No funds captured.'); toast('Signature verification failed', 'error'); }
+        setStatusPill(data.cart_status); await refreshAudit();
+      } catch (e) { toast('Verification request failed', 'error'); }
     },
-    modal: {
-      ondismiss: function () {
-        toast('Checkout dismissed', 'info');
-      }
-    }
+    modal: { ondismiss: function () { toast('Checkout dismissed', 'info'); } }
   };
-
-  const rzp = new Razorpay(options);
-  rzp.open();
+  const rzp = new Razorpay(options); rzp.open();
 }
 
-document.getElementById('chat-form').addEventListener('submit', (e) => {
-  e.preventDefault();
-  const input = document.getElementById('chat-input');
-  const val = input.value.trim();
-  if (!val) return;
-  input.value = '';
-  sendMessage(val);
-});
+document.getElementById('chat-form').addEventListener('submit', (e) => { e.preventDefault(); const input = document.getElementById('chat-input'); const val = input.value.trim(); if (!val) return; input.value = ''; sendMessage(val); });
+document.getElementById('chat-input').addEventListener('keydown', (e) => { if (e.key === 'Escape') e.target.blur(); });
 
-document.getElementById('chat-input').addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') e.target.blur();
-});
-
-// initial state
 document.getElementById('audit-body').innerHTML = emptyAuditState();
-document.getElementById('campaign-list').innerHTML = emptyCampaignState();
+switchTab('checkout');
 resetSession();
-refreshCampaignStatus();
+fetch(`${API_BASE}/api/health`).catch(() => {
+  document.getElementById('conn-dot').className = 'w-1.5 h-1.5 rounded-full bg-rose-500 inline-block';
+  document.getElementById('conn-label').textContent = 'API unreachable';
+});
 </script>
 </body>
 </html>

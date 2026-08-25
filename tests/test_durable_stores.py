@@ -6,6 +6,29 @@ Adversarial/concurrency tests for the durable DynamoDB-backed stores,
 using `moto` to mock DynamoDB so these run with no real AWS account
 and no network calls.
 
+IMPORTANT — moto thread-safety caveat
+--------------------------------------
+moto's mocked backends are NOT thread-safe: throwing multiple real
+threads at the same moto-mocked table concurrently can corrupt its
+internal dict-based storage (observed directly while building this
+suite — 12 threads hammering the audit chain corrupted moto's state
+rather than exercising a genuine DynamoDB race).
+
+To keep these tests meaningful without hitting that bug, the three
+concurrency tests below still spin up real threads (so the code path
+genuinely executes from multiple threads, and thread-scheduling
+nondeterminism is still present), but serialize the actual moto-backed
+store call itself behind a `threading.Lock`. This means these tests no
+longer prove that DynamoDB's server-side conditional-write would win a
+true simultaneous race — moto can't safely support that here. What
+they DO still prove, and prove for real:
+  - the store's business logic correctly rejects the loser of a
+    contested reservation/write once it observes the already-updated
+    state,
+  - budgets are never overspent and carts are never silently clobbered,
+    even under repeated contention,
+  - no corrupted/forked state escapes the store under thread churn.
+
 Install: pip install moto boto3 pytest
 """
 
@@ -89,21 +112,27 @@ def test_audit_chain_never_forks_under_concurrent_writers():
 
     trail = DynamoAuditTrail(table_name=AUDIT_TABLE, region_name=AWS_REGION)
 
+    # Serializes the actual moto-backed trail.log() call across threads
+    # to avoid moto's known thread-safety issue corrupting its internal
+    # storage. See module docstring for what this test still proves.
+    moto_lock = threading.Lock()
+
     N_THREADS = 12
     ENTRIES_PER_THREAD = 5
     errors: list[Exception] = []
-    lock = threading.Lock()
+    errors_lock = threading.Lock()
 
     def worker(thread_id: int):
         try:
             for i in range(ENTRIES_PER_THREAD):
-                trail.log(
-                    event_type="CONCURRENT_TEST_EVENT",
-                    cart_id=f"cart_{thread_id}",
-                    payload={"thread": thread_id, "i": i},
-                )
+                with moto_lock:
+                    trail.log(
+                        event_type="CONCURRENT_TEST_EVENT",
+                        cart_id=f"cart_{thread_id}",
+                        payload={"thread": thread_id, "i": i},
+                    )
         except Exception as e:  # pragma: no cover - captured for assertion
-            with lock:
+            with errors_lock:
                 errors.append(e)
 
     threads = [threading.Thread(target=worker, args=(t,)) for t in range(N_THREADS)]
@@ -173,25 +202,35 @@ def test_campaign_budget_atomic_reservation_blocks_overspend():
     )
     store.ensure_budget(budget)
 
+    # Serializes the actual moto-backed try_reserve() call across
+    # threads (moto is not thread-safe — see module docstring). Both
+    # threads still race to the barrier and contend for the lock, so
+    # thread-scheduling nondeterminism is real; only the underlying
+    # DynamoDB call itself is serialized to protect moto's state.
+    moto_lock = threading.Lock()
+
     # Two reservations that are EACH individually affordable against a
-    # stale read of remaining budget (1000 each fits under 1000 alone),
-    # but which JOINTLY would blow the ceiling (1000 + 1000 > 1000).
-    # try_reserve is atomic server-side, so this must not double-spend
-    # even though both "look" affordable from a naive client-side read.
+    # stale read of remaining budget (700 each fits under 1000 alone),
+    # but which JOINTLY would blow the ceiling (700 + 700 > 1000).
     amount = Decimal("700.00")
 
     results = {}
     errors = {}
+    results_lock = threading.Lock()
     barrier = threading.Barrier(2)
 
     def reserve(tag):
-        barrier.wait()  # maximize overlap window
+        barrier.wait()  # maximize overlap window before serialization
         try:
-            results[tag] = store.try_reserve(
-                "2026-08", amount, budget.max_discount_spend, budget.max_concurrent_campaigns
-            )
+            with moto_lock:
+                res = store.try_reserve(
+                    "2026-08", amount, budget.max_discount_spend, budget.max_concurrent_campaigns
+                )
+            with results_lock:
+                results[tag] = res
         except BudgetExceededError as e:
-            errors[tag] = e
+            with results_lock:
+                errors[tag] = e
 
     t1 = threading.Thread(target=reserve, args=("a",))
     t2 = threading.Thread(target=reserve, args=("b",))
@@ -309,16 +348,25 @@ def test_session_store_concurrent_double_submit_only_one_wins():
 
     current_version = store.get_version(cart.cart_id)
 
+    # Serializes the actual moto-backed save_cart() call across threads
+    # (moto is not thread-safe — see module docstring).
+    moto_lock = threading.Lock()
+
     results = {}
     errors = {}
+    results_lock = threading.Lock()
     barrier = threading.Barrier(2)
 
     def submit(tag):
         barrier.wait()
         try:
-            results[tag] = store.save_cart(cart, expected_version=current_version)
+            with moto_lock:
+                res = store.save_cart(cart, expected_version=current_version)
+            with results_lock:
+                results[tag] = res
         except SessionConflictError as e:
-            errors[tag] = e
+            with results_lock:
+                errors[tag] = e
 
     t1 = threading.Thread(target=submit, args=("first",))
     t2 = threading.Thread(target=submit, args=("second",))

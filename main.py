@@ -1,11 +1,13 @@
 # ============================================================
-# FILE: main.py  (demo runner — exercises checkout, agent
-#                 propose, and campaign lifecycle scenarios)
+# FILE: main.py  (demo runner — checkout, agent-propose, and
+#                 campaign lifecycle scenarios, zero-cloud)
 # ============================================================
 """
 Run with: python main.py
 
-Requires: see requirements.txt
+No AWS account, no moto, no environment variables required — every
+store this script touches (audit trail, campaign budget) is an
+in-memory, thread-safe singleton from the local storage modules.
 """
 
 from decimal import Decimal
@@ -40,7 +42,6 @@ def scenario_success():
     print("\n===== SCENARIO 1: Legitimate upsell, passes gatekeeper, order created =====")
     catalog = make_catalog()
     cart = CartState()
-    cart.line_items = []
     gateway = RazorpayGateway()
 
     actions = [
@@ -82,7 +83,7 @@ def scenario_guardrail_blocks_excessive_discount():
         ),
         ProposedAction(
             action_type="APPLY_DISCOUNT", sku="SKU_GRINDER_003", discount_pct=Decimal("40.0"),
-            rationale="Aggressive discount to force conversion.",  # exceeds 5% ceiling
+            rationale="Aggressive discount to force conversion.",
         ),
     ]
 
@@ -123,21 +124,11 @@ def scenario_graceful_failure():
 
 
 def scenario_external_agent_propose():
-    """
-    Scenario 4: an EXTERNAL AI shopping agent (not our conversational
-    UI) proposes a valid order directly, using the exact same graph
-    that backs POST /api/agent/propose in api.py. Demonstrates that
-    the machine-to-machine entrypoint gets identical gatekeeper
-    enforcement — no separate, weaker code path for agent traffic.
-    """
     print("\n===== SCENARIO 4: External AI buyer agent proposes via /api/agent/propose path =====")
     catalog = make_catalog()
     cart = CartState()
     gateway = RazorpayGateway()
 
-    # This mirrors what an external agent would submit after reading
-    # the /.well-known/agentic-commerce.json manifest and the catalog
-    # feed's published discount ceilings.
     actions = [
         ProposedAction(
             action_type="ADD_ITEM", sku="SKU_COFFEE_001",
@@ -161,17 +152,6 @@ def scenario_external_agent_propose():
 
 
 def scenario_campaign_cycle_mixed_outcomes():
-    """
-    Scenario 5: a full campaign growth cycle against a fresh budget
-    period, showing at least one campaign approved (fits under the
-    ceiling) and one rejected (exceeds the per-campaign discount cap
-    or would blow the period ceiling).
-
-    NOTE: this exercises campaign_store.CampaignBudgetStore directly.
-    The full LLM-driven campaign_orchestrator (agents/campaign_orchestrator.py)
-    wraps this same store with its own gatekeeper node, analogous to
-    agent_graph.py's PaymentGatekeeper.
-    """
     print("\n===== SCENARIO 5: Campaign cycle — one approved, one rejected =====")
     from campaign_store import CampaignBudgetStore, DurableCampaignBudget, BudgetExceededError
 
@@ -183,7 +163,7 @@ def scenario_campaign_cycle_mixed_outcomes():
     )
     store.ensure_budget(budget)
 
-    campaign_a_amount = Decimal("2000.00")  # fits comfortably
+    campaign_a_amount = Decimal("2000.00")
     try:
         state = store.try_reserve(
             "demo-period-1", campaign_a_amount,
@@ -194,13 +174,13 @@ def scenario_campaign_cycle_mixed_outcomes():
     except BudgetExceededError as e:
         print(f"Campaign A unexpectedly rejected: {e}")
 
-    campaign_b_amount = Decimal("4000.00")  # would push total to 6000 > 5000 ceiling
+    campaign_b_amount = Decimal("4000.00")
     try:
         store.try_reserve(
             "demo-period-1", campaign_b_amount,
             budget.max_discount_spend, budget.max_concurrent_campaigns,
         )
-        print(f"Campaign B unexpectedly APPROVED — this should not happen")
+        print("Campaign B unexpectedly APPROVED — this should not happen")
     except BudgetExceededError as e:
         print(f"Campaign B REJECTED (expected): {e}")
 
@@ -210,30 +190,20 @@ def scenario_campaign_cycle_mixed_outcomes():
 
 
 def scenario_campaign_cycle_budget_depletion():
-    """
-    Scenario 6: runs a SECOND campaign cycle immediately after
-    Scenario 5, against the SAME period, demonstrating that a
-    campaign which would have been perfectly affordable in isolation
-    (well under the raw ceiling) is now blocked purely because prior
-    reservations already consumed the remaining headroom.
-    """
     print("\n===== SCENARIO 6: Second cycle — prior spend blocks an otherwise-affordable campaign =====")
     from campaign_store import CampaignBudgetStore, DurableCampaignBudget, BudgetExceededError
 
     store = CampaignBudgetStore()
     budget = DurableCampaignBudget(
-        period_label="demo-period-1",  # same period as scenario 5 — budget already partially spent
+        period_label="demo-period-1",
         max_discount_spend=Decimal("5000.00"),
         max_concurrent_campaigns=3,
     )
-    store.ensure_budget(budget)  # no-op, already initialized by scenario 5
+    store.ensure_budget(budget)
 
     remaining_before = store.remaining_budget("demo-period-1")
     print(f"Remaining budget entering this cycle: ₹{remaining_before}")
 
-    # This amount (₹2500) would be well under the FULL ₹5000 ceiling in
-    # isolation, but Scenario 5 already committed ₹2000, leaving only
-    # ₹3000 — still enough here, so first show it succeeding...
     campaign_c_amount = Decimal("2500.00")
     try:
         state = store.try_reserve(
@@ -245,9 +215,6 @@ def scenario_campaign_cycle_budget_depletion():
     except BudgetExceededError as e:
         print(f"Campaign C REJECTED: {e}")
 
-    # ...then show a campaign that WOULD be affordable against the full
-    # ₹5000 ceiling (₹800 <<< ₹5000) but is now blocked because only
-    # scraps of headroom remain after A and C.
     campaign_d_amount = Decimal("800.00")
     remaining_now = store.remaining_budget("demo-period-1")
     print(f"Remaining budget before Campaign D: ₹{remaining_now} "
@@ -275,6 +242,6 @@ if __name__ == "__main__":
     scenario_campaign_cycle_mixed_outcomes()
     scenario_campaign_cycle_budget_depletion()
 
-    print("\n===== FULL IMMUTABLE AUDIT TRAIL (in-memory demo trail) =====")
+    print("\n===== FULL IMMUTABLE AUDIT TRAIL =====")
     print(AUDIT.pretty_print())
     print("\nAudit chain integrity intact:", AUDIT.verify_integrity())

@@ -2,27 +2,49 @@
 # FILE: audit_trail.py
 # ============================================================
 """
-Immutable, hash-chained audit trail.
+Thread-safe, in-memory, hash-chained, append-only audit trail.
 
-Every state transition, every LLM rationale, and every gatekeeper
-verdict is appended here. Entries are hash-linked (like a mini
-blockchain) so any post-hoc tampering with a historical entry breaks
-the chain and is detectable — this is the "completely explainable +
-immutable audit trail" requirement from The Bar.
+Every state transition, LLM rationale, and gatekeeper verdict is
+appended here. Entries are hash-linked (like a mini blockchain) so
+any post-hoc tampering with a historical entry breaks the chain and
+is detectable — this is the "explainable + immutable audit trail"
+requirement, now running with zero external dependencies.
 
-This is intentionally dependency-free (stdlib only) so it can be
-swapped for an actual append-only store (WORM S3 bucket, ledger DB,
-etc.) in production without changing calling code.
+CONCURRENCY MODEL — WHY THIS CAN'T FORK
+------------------------------------------
+The entire risk in a hash-chained log is two writers both reading the
+same "current tail hash", both computing a valid-looking next entry
+that claims that same tail as its prev_hash, and both appending —
+silently forking the chain into two histories that each individually
+"verify" but disagree with each other.
+
+The DynamoDB version prevented this with an atomic conditional
+UpdateItem on a shared counter row. Here, the equivalent primitive is
+a single threading.Lock held for the ENTIRE
+read-tail -> compute-hash -> append sequence in `log()`. No other
+thread can read the tail while one thread is mid-append, so two
+threads can never compute entries against the same tail — the fork
+condition is structurally prevented, not just made unlikely.
+
+This is intentionally the ONLY write path (`log()`) — there is no
+update or delete method anywhere in this class, matching the
+production version's append-only invariant.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Optional
+
+logger = logging.getLogger("agentictrade.audit_trail")
+
+GENESIS_HASH = "0" * 64
 
 
 def _default(o: Any):
@@ -35,7 +57,7 @@ def _default(o: Any):
 class AuditEntry:
     seq: int
     timestamp: float
-    event_type: str          # e.g. "UPSELL_PROPOSED", "GATEKEEPER_VERDICT", "RAZORPAY_ORDER_CREATED"
+    event_type: str
     cart_id: str
     payload: dict
     prev_hash: str
@@ -72,43 +94,69 @@ class AuditEntry:
 
 
 class AuditTrail:
-    """Append-only, hash-chained log. `log()` is the only write path;
-    there is deliberately no update/delete method."""
-
-    GENESIS_HASH = "0" * 64
+    """
+    Thread-safe, append-only, hash-chained log. `log()` acquires a
+    single lock for its full duration — reading the tail, computing
+    the new entry's hash, and appending all happen as one atomic
+    unit, which is what prevents concurrent writers from forking the
+    chain (see module docstring).
+    """
 
     def __init__(self):
+        self._lock = threading.Lock()
         self._entries: list[AuditEntry] = []
 
     def log(self, event_type: str, cart_id: str, payload: dict) -> AuditEntry:
-        prev_hash = self._entries[-1].entry_hash if self._entries else self.GENESIS_HASH
-        entry = AuditEntry(
-            seq=len(self._entries),
-            timestamp=time.time(),
-            event_type=event_type,
-            cart_id=cart_id,
-            payload=payload,
-            prev_hash=prev_hash,
-        )
-        self._entries.append(entry)
-        return entry
+        with self._lock:
+            prev_hash = self._entries[-1].entry_hash if self._entries else GENESIS_HASH
+            entry = AuditEntry(
+                seq=len(self._entries),
+                timestamp=time.time(),
+                event_type=event_type,
+                cart_id=cart_id,
+                payload=payload,
+                prev_hash=prev_hash,
+            )
+            self._entries.append(entry)
+            return entry
 
     def verify_integrity(self) -> bool:
-        """Walks the chain and confirms no entry has been tampered with."""
-        prev_hash = self.GENESIS_HASH
-        for entry in self._entries:
+        """
+        Walks the chain and confirms no entry has been tampered with.
+        Reads a snapshot of the entry list under the lock, then
+        verifies outside the lock (verification is read-only and pure
+        CPU work — no need to hold the lock across the whole scan,
+        which would otherwise block new log() calls for longer than
+        necessary on a large chain).
+        """
+        with self._lock:
+            entries_snapshot = list(self._entries)
+
+        prev_hash = GENESIS_HASH
+        for entry in entries_snapshot:
             if entry.prev_hash != prev_hash:
+                logger.error("Chain broken at seq=%s: prev_hash mismatch", entry.seq)
                 return False
             if entry.entry_hash != entry._compute_hash():
+                logger.error(
+                    "Chain broken at seq=%s: entry_hash does not match recomputed "
+                    "hash (payload or metadata was tampered with)", entry.seq,
+                )
                 return False
             prev_hash = entry.entry_hash
         return True
 
     def history_for_cart(self, cart_id: str) -> list[dict]:
-        return [e.to_dict() for e in self._entries if e.cart_id == cart_id]
+        with self._lock:
+            return [e.to_dict() for e in self._entries if e.cart_id == cart_id]
 
     def dump(self) -> list[dict]:
-        return [e.to_dict() for e in self._entries]
+        with self._lock:
+            return [e.to_dict() for e in self._entries]
+
+    def entry_count(self) -> int:
+        with self._lock:
+            return len(self._entries)
 
     def pretty_print(self, cart_id: Optional[str] = None) -> str:
         entries = self.history_for_cart(cart_id) if cart_id else self.dump()
@@ -121,7 +169,12 @@ class AuditTrail:
             )
         return "\n".join(lines)
 
+    def clear_all(self) -> None:
+        """Test/demo utility only — never call this from a request handler."""
+        with self._lock:
+            self._entries = []
 
-# Module-level singleton used by the demo graph. In a real service this
-# would be injected/DI'd rather than global.
+
+# Module-level singleton. Matches the ergonomics every other module in
+# this codebase already expects (`from audit_trail import AUDIT`).
 AUDIT = AuditTrail()

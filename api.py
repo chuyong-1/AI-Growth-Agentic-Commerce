@@ -2,28 +2,16 @@
 # FILE: api.py
 # ============================================================
 """
-FastAPI backend — fully durable version.
+AgenticTrade — FastAPI backend.
 
-Wires the conversational agent, the compiled LangGraph (upsell ->
-gatekeeper -> Razorpay -> recovery), the campaign orchestrator
-(revenue growth), the agent-readable catalog feed, and the immutable,
-DynamoDB-backed audit trail into HTTP endpoints.
-
-Nothing in this file holds financially-meaningful state in a Python
-process global. Cart state, conversation history, gateway
-failure-injection flags, the campaign budget, and the audit trail are
-all persisted in DynamoDB, so this survives restarts and is safe to
-run as multiple concurrent Lambda instances.
+Zero-cloud, single-process design: every store below (session, audit,
+campaign budget) is an in-memory, thread-safe singleton. This trades
+cross-restart durability and multi-instance scaling for a genuinely
+zero-config `uvicorn api:app --reload` — no AWS account, no table
+provisioning, no environment variables required to run.
 
 Run with:
     uvicorn api:app --reload
-
-Env vars required:
-    ANTHROPIC_API_KEY
-    RAZORPAY_TEST_KEY_ID
-    RAZORPAY_TEST_KEY_SECRET
-    AUDIT_TABLE, SESSION_TABLE, CAMPAIGN_TABLE   (default to *-dev-* names)
-    AWS_REGION                                    (default us-east-1)
 """
 
 from __future__ import annotations
@@ -33,13 +21,15 @@ from decimal import Decimal
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from langchain_core.messages import messages_from_dict, messages_to_dict
 
 from schema import Catalog, CatalogItem, CartState, CartStatus, ProposedAction
-from audit_trail_dynamo import get_audit_trail
+from audit_trail import AUDIT
 from razorpay_client import RazorpayGateway
 from agent_graph import build_graph
 from agents.conversational_agent import ConversationalAgent
@@ -56,9 +46,6 @@ logger = logging.getLogger("agentictrade.api")
 logging.basicConfig(level=logging.INFO)
 
 
-# ------------------------------------------------------------------
-# Demo catalog — swap for a DB-backed lookup in real production.
-# ------------------------------------------------------------------
 def make_catalog() -> Catalog:
     return Catalog(
         items={
@@ -83,22 +70,68 @@ CATALOG = make_catalog()
 GRAPH = build_graph()
 AGENT = ConversationalAgent(catalog=CATALOG)
 
-# Durable stores — each is a lazily-constructed singleton (see their
-# respective modules), safe to call get_*() repeatedly.
-AUDIT = get_audit_trail()
 SESSION_STORE = get_session_store()
 CAMPAIGN_STORE = get_campaign_store()
 
 DEFAULT_CAMPAIGN_BUDGET = DurableCampaignBudget(period_label="default-period")
 
+# Soft cap purely to give /api/health a meaningful memory-footprint
+# signal in a long-running local demo — this store has no TTL/eviction
+# (deliberately: it's an in-memory demo store, not a production
+# cache), so a multi-day-running instance will accumulate carts
+# indefinitely. This constant documents that tradeoff rather than
+# silently hiding it.
+SESSION_STORE_SOFT_LIMIT_WARNING = 5000
+
 app = FastAPI(title="AgenticTrade — Growth & Agentic Commerce Backend")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten in real deployment
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 app.mount("/static", StaticFiles(directory="static", html=True), name="static")
+
+
+# ==================================================================
+# Global error boundaries — see docstring notes below each handler
+# ==================================================================
+@app.exception_handler(RequestValidationError)
+async def handle_validation_error(request: Request, exc: RequestValidationError):
+    """
+    FastAPI/Pydantic returns 422 for malformed bodies by default, but
+    the default error shape is a nested list of per-field errors —
+    awkward for a frontend to render as a single toast. This
+    normalizes it to a flat `detail` string while still logging the
+    full structured error server-side for debugging.
+    """
+    first_error = exc.errors()[0] if exc.errors() else {}
+    field_path = ".".join(str(p) for p in first_error.get("loc", []))
+    logger.warning("Request validation failed on %s: %s", request.url.path, exc.errors())
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": f"Invalid request body"
+                      + (f" (field: {field_path})" if field_path else "")
+                      + f" — {first_error.get('msg', 'malformed payload')}",
+        },
+    )
+
+
+@app.exception_handler(Exception)
+async def handle_unexpected_error(request: Request, exc: Exception):
+    """
+    Last-resort boundary: any bug anywhere in the LangGraph/LLM/store
+    stack returns a clean 500 instead of an unhandled stack trace
+    leaking to the client or destabilizing the worker process.
+    Deliberately does NOT re-raise — catching here and returning a
+    normal HTTP response keeps the worker alive for the next request.
+    """
+    logger.exception("Unhandled exception on %s", request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An internal error occurred. No charge was made and no state was corrupted."},
+    )
 
 
 # ------------------------------------------------------------------
@@ -109,9 +142,6 @@ def _base_url(request: Request) -> str:
 
 
 def _load_or_create_cart(cart_id: Optional[str]) -> tuple[CartState, int]:
-    """Returns (cart, version). version=0 means brand new / not yet
-    persisted, which _persist_cart_with_retry treats as an
-    unconditional first write."""
     if cart_id:
         existing = SESSION_STORE.get_cart(cart_id)
         if existing:
@@ -136,8 +166,9 @@ def _persist_cart_with_retry(cart: CartState, expected_version: int, max_attempt
     Optimistic-concurrency save with a small retry loop. Protects
     against two overlapping requests for the same cart_id (e.g. a
     double-submitted checkout click) silently clobbering one
-    another's writes — the loser re-reads the current version and
-    retries, rather than losing an update invisibly.
+    another's writes. After max_attempts, surfaces a 409 rather than
+    retrying forever — an infinite retry loop under sustained
+    contention would hang the request.
     """
     attempt = 0
     version = expected_version
@@ -160,10 +191,6 @@ def _persist_cart_with_retry(cart: CartState, expected_version: int, max_attempt
 
 
 def _resolve_gateway(cart_id: str, requested_failure: Optional[str]) -> RazorpayGateway:
-    """Builds a fresh RazorpayGateway per request (it's a thin,
-    stateless-except-for-test-hooks wrapper) and applies either an
-    explicitly-requested one-shot failure or a previously-armed one
-    persisted from a prior /api/chat call (e.g. via CLI's /fail)."""
     gateway = RazorpayGateway()
     if requested_failure:
         gateway.force_failure(requested_failure)
@@ -174,13 +201,54 @@ def _resolve_gateway(cart_id: str, requested_failure: Optional[str]) -> Razorpay
     return gateway
 
 
+def _safe_graph_invoke(graph_input: dict, cart_id: str) -> dict:
+    """
+    Defensive boundary around GRAPH.invoke(). Two failure classes:
+
+      1. Any exception raised inside a graph node that wasn't already
+         caught by that node's own try/except (agent_graph.py's
+         create_order_node handles Razorpay-specific errors, including
+         rate limits, directly — this is the belt-and-suspenders
+         backstop for anything unanticipated).
+      2. A malformed/incomplete GraphState returned from invoke()
+         (should be structurally impossible given the graph's own
+         typing — checked anyway, so the boundary between "trusted
+         internal graph" and "response serialization" isn't just
+         assumed).
+
+    On any failure, nothing here mutates the caller's cart object —
+    upsell_agent_node and payment_gatekeeper_node only mutate a cart
+    that's passed by reference and always leave it in a clean
+    terminal status before any exception could reach this wrapper.
+    """
+    try:
+        result = GRAPH.invoke(graph_input)
+    except Exception as e:
+        logger.exception("Graph invocation failed for cart=%s", cart_id)
+        AUDIT.log(
+            "GRAPH_INVOCATION_FAILED",
+            cart_id,
+            {"error_type": type(e).__name__, "error": str(e)},
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="The checkout engine encountered an unexpected error. No charge was made.",
+        ) from e
+
+    if "cart" not in result:
+        logger.error("Graph result missing 'cart' key for cart=%s: %s", cart_id, result)
+        raise HTTPException(status_code=500, detail="Checkout engine returned an incomplete result.")
+
+    return result
+
+
 # ==================================================================
 # POST /api/chat — conversational in-app checkout
 # ==================================================================
 class ChatRequest(BaseModel):
     cart_id: Optional[str] = None
-    message: str
-    simulate_failure: Optional[str] = None  # "timeout" | "signature" | None — test hook
+    message: str = Field(min_length=1, max_length=4000)
+    simulate_failure: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
@@ -195,6 +263,12 @@ class ChatResponse(BaseModel):
 
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
+    if req.simulate_failure and req.simulate_failure not in ("timeout", "signature"):
+        raise HTTPException(
+            status_code=400,
+            detail="simulate_failure must be 'timeout', 'signature', or omitted",
+        )
+
     cart, version = _load_or_create_cart(req.cart_id)
     history = _load_history(req.cart_id)
     gateway = _resolve_gateway(cart.cart_id, req.simulate_failure)
@@ -206,30 +280,28 @@ def chat(req: ChatRequest):
             history=history, user_message=req.message
         )
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"LLM turn failed: {e}") from e
+        logger.exception("LLM turn failed for cart=%s", cart.cart_id)
+        AUDIT.log("LLM_TURN_FAILED", cart.cart_id, {"error": str(e)})
+        raise HTTPException(status_code=502, detail=f"Assistant is temporarily unavailable: {e}") from e
 
     system_notes: list[str] = []
     order_id: Optional[str] = None
 
-    # Only invoke the graph (gatekeeper + Razorpay) if the model actually
-    # proposed cart mutations this turn. Pure conversation (e.g. "hi",
-    # "what do you have?") shouldn't trigger a checkout attempt.
     if proposed_actions:
-        result = GRAPH.invoke(
+        result = _safe_graph_invoke(
             {
                 "cart": cart,
                 "catalog": CATALOG,
                 "proposed_actions": proposed_actions,
                 "gateway": gateway,
                 "user_messages": [],
-            }
+            },
+            cart.cart_id,
         )
         cart = result["cart"]
         order_id = result.get("order_id")
         system_notes.extend(result.get("user_messages", []))
 
-    # Clear any one-shot failure injection now that this turn has run,
-    # whether it came from this request or a previously-armed CLI /fail.
     gateway.force_failure(None)
     SESSION_STORE.set_failure_injection(cart.cart_id, None)
 
@@ -247,14 +319,9 @@ def chat(req: ChatRequest):
     )
 
 
-# ==================================================================
-# POST /api/chat/arm-failure — persist a one-shot failure for the
-# NEXT /api/chat call on this cart (durable equivalent of the old
-# in-memory "armed" test hook used by cli_chat.py's /fail command)
-# ==================================================================
 class ArmFailureRequest(BaseModel):
-    cart_id: str
-    mode: str  # "timeout" | "signature"
+    cart_id: str = Field(min_length=1)
+    mode: str
 
 
 @app.post("/api/chat/arm-failure")
@@ -265,25 +332,10 @@ def arm_failure(req: ArmFailureRequest):
     return {"cart_id": req.cart_id, "armed_failure": req.mode}
 
 
-# ==================================================================
-# POST /api/agent/propose — direct machine-to-machine entrypoint
-# ------------------------------------------------------------------
-# Lets an EXTERNAL AI buyer agent (not our own chat UI) submit
-# ProposedAction objects directly, still routed through the exact
-# same LangGraph (UpsellAgent -> PaymentGatekeeper -> ...). This is
-# the "transactable by an AI buyer end to end" surface: no human-
-# facing chat turn is required, but no proposal skips the gatekeeper
-# either — same guarantees, different front door.
-# ==================================================================
 class AgentProposeRequest(BaseModel):
     cart_id: Optional[str] = None
-    actions: list[ProposedAction]
-    agent_identity: Optional[str] = Field(
-        default=None,
-        description="Free-text identifier for the calling agent, logged to the "
-                    "audit trail. Not an auth mechanism in this demo — see the "
-                    "'auth' field in /.well-known/agentic-commerce.json.",
-    )
+    actions: list[ProposedAction] = Field(min_length=1, max_length=20)
+    agent_identity: Optional[str] = Field(default=None, max_length=200)
 
 
 class AgentProposeResponse(BaseModel):
@@ -312,14 +364,15 @@ def agent_propose(req: AgentProposeRequest):
         },
     )
 
-    result = GRAPH.invoke(
+    result = _safe_graph_invoke(
         {
             "cart": cart,
             "catalog": CATALOG,
             "proposed_actions": req.actions,
             "gateway": gateway,
             "user_messages": [],
-        }
+        },
+        cart.cart_id,
     )
     cart = result["cart"]
     _persist_cart_with_retry(cart, version)
@@ -333,40 +386,21 @@ def agent_propose(req: AgentProposeRequest):
     )
 
 
-# ==================================================================
-# GET /.well-known/agentic-commerce.json  — agent discovery manifest
-# GET /api/catalog/feed                    — agent-readable catalog
-# ==================================================================
 @app.get("/.well-known/agentic-commerce.json")
 def well_known_manifest(request: Request):
-    """
-    Single discovery entrypoint. An AI buyer agent that only knows
-    this store's domain should be able to fetch this ONE url and
-    learn where the catalog, proposal, checkout, and audit endpoints
-    live — the ACP/UAP-style discovery contract.
-    """
     return build_well_known_manifest(_base_url(request))
 
 
 @app.get("/api/catalog/feed")
 def catalog_feed():
-    """The machine-readable product feed itself: SKUs, prices, and
-    the exact negotiable discount ceilings the gatekeeper enforces."""
     return build_catalog_feed(CATALOG)
 
 
-# ==================================================================
-# Campaign orchestrator endpoints — durable, race-safe budget
-# ==================================================================
 @app.post("/api/campaigns/run")
 def run_campaigns(period_label: Optional[str] = None):
-    """
-    Triggers one campaign-proposal cycle: gathers growth signals,
-    proposes time-boxed discount campaigns, and runs each through the
-    deterministic, atomically-budgeted CampaignGatekeeper. In
-    production, wire this to a scheduled EventBridge rule instead of
-    calling it manually.
-    """
+    if period_label is not None and not period_label.strip():
+        raise HTTPException(status_code=400, detail="period_label, if provided, cannot be blank")
+
     budget = DurableCampaignBudget(
         period_label=period_label or DEFAULT_CAMPAIGN_BUDGET.period_label,
         max_discount_spend=DEFAULT_CAMPAIGN_BUDGET.max_discount_spend,
@@ -375,7 +409,11 @@ def run_campaigns(period_label: Optional[str] = None):
     )
     CAMPAIGN_STORE.ensure_budget(budget)
 
-    decided = run_campaign_cycle_durable(CATALOG, budget, CAMPAIGN_STORE)
+    try:
+        decided = run_campaign_cycle_durable(CATALOG, budget, CAMPAIGN_STORE)
+    except Exception as e:
+        logger.exception("Campaign cycle failed")
+        raise HTTPException(status_code=500, detail=f"Campaign cycle failed: {e}") from e
 
     return {
         "period": budget.period_label,
@@ -397,9 +435,7 @@ def campaign_status(period_label: Optional[str] = None):
         "period_label": state["period_label"],
         "max_discount_spend": str(state["max_discount_spend"]),
         "committed_spend": str(state["committed_spend"]),
-        "remaining_budget": str(
-            Decimal(state["max_discount_spend"]) - Decimal(state["committed_spend"])
-        ),
+        "remaining_budget": str(state["max_discount_spend"] - state["committed_spend"]),
         "active_count": int(state["active_count"]),
         "max_concurrent_campaigns": int(state["max_concurrent_campaigns"]),
     }
@@ -417,14 +453,11 @@ def campaign_audit():
     }
 
 
-# ==================================================================
-# POST /api/checkout/verify
-# ==================================================================
 class VerifyRequest(BaseModel):
-    cart_id: str
-    razorpay_order_id: str
-    razorpay_payment_id: str
-    razorpay_signature: str
+    cart_id: str = Field(min_length=1)
+    razorpay_order_id: str = Field(min_length=1)
+    razorpay_payment_id: str = Field(min_length=1)
+    razorpay_signature: str = Field(min_length=1)
 
 
 class VerifyResponse(BaseModel):
@@ -441,49 +474,41 @@ def verify_checkout(req: VerifyRequest):
     version = SESSION_STORE.get_version(req.cart_id)
 
     if cart.razorpay_order_id != req.razorpay_order_id:
-        AUDIT.log(
-            "SIGNATURE_VERIFICATION_ORDER_MISMATCH",
-            req.cart_id,
-            {"expected": cart.razorpay_order_id, "got": req.razorpay_order_id},
-        )
+        AUDIT.log("SIGNATURE_VERIFICATION_ORDER_MISMATCH", req.cart_id, {
+            "expected": cart.razorpay_order_id, "got": req.razorpay_order_id,
+        })
         raise HTTPException(status_code=400, detail="order_id does not match this cart's active order")
 
     gateway = RazorpayGateway()
-    verified = gateway.verify_payment_signature(
-        {
+    try:
+        verified = gateway.verify_payment_signature({
             "razorpay_order_id": req.razorpay_order_id,
             "razorpay_payment_id": req.razorpay_payment_id,
             "razorpay_signature": req.razorpay_signature,
-        }
-    )
+        })
+    except Exception as e:
+        # Fail closed, not open: any exception in the verification
+        # step itself is treated as "not verified", never as verified.
+        logger.exception("Signature verification raised for cart=%s", req.cart_id)
+        AUDIT.log("PAYMENT_VERIFICATION_ERROR", req.cart_id, {"error": str(e)})
+        verified = False
 
     if verified:
         cart.status = CartStatus.COMPLETED
-        AUDIT.log(
-            "PAYMENT_VERIFIED",
-            req.cart_id,
-            {"payment_id": req.razorpay_payment_id, "order_id": req.razorpay_order_id},
-        )
+        AUDIT.log("PAYMENT_VERIFIED", req.cart_id, {
+            "payment_id": req.razorpay_payment_id, "order_id": req.razorpay_order_id,
+        })
     else:
         cart.status = CartStatus.PAYMENT_FAILED
-        AUDIT.log(
-            "PAYMENT_VERIFICATION_FAILED",
-            req.cart_id,
-            {"payment_id": req.razorpay_payment_id, "order_id": req.razorpay_order_id},
-        )
+        AUDIT.log("PAYMENT_VERIFICATION_FAILED", req.cart_id, {
+            "payment_id": req.razorpay_payment_id, "order_id": req.razorpay_order_id,
+        })
 
     _persist_cart_with_retry(cart, version)
 
-    return VerifyResponse(
-        cart_id=req.cart_id,
-        verified=verified,
-        cart_status=cart.status.value,
-    )
+    return VerifyResponse(cart_id=req.cart_id, verified=verified, cart_status=cart.status.value)
 
 
-# ==================================================================
-# GET /api/audit/{cart_id}
-# ==================================================================
 @app.get("/api/audit/{cart_id}")
 def get_audit_trail_endpoint(cart_id: str):
     entries = AUDIT.history_for_cart(cart_id)
@@ -499,4 +524,13 @@ def get_audit_trail_endpoint(cart_id: str):
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "storage": "dynamodb"}
+    return {
+        "status": "ok",
+        "storage": "in-memory (thread-safe, single-process)",
+        "cart_count": SESSION_STORE.cart_count(),
+        "audit_entry_count": AUDIT.entry_count(),
+        "memory_note": (
+            "In-memory store has no eviction; for long-running demo "
+            "instances beyond a few thousand carts, restart the process."
+        ) if SESSION_STORE.cart_count() > SESSION_STORE_SOFT_LIMIT_WARNING else None,
+    }

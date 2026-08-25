@@ -1,20 +1,34 @@
 # ============================================================
-# FILE: agent_graph.py
+# PATCH: agent_graph.py
 # ============================================================
 """
-LangGraph orchestration for the Autonomous Upsell & Checkout Agent.
-
-Graph topology:
-
-    UpsellAgent  -->  PaymentGatekeeper --(approved)--> CreateOrderNode --(ok)--> Complete
-                            |                                  |
-                            |(rejected)                        |(razorpay failure)
-                            v                                  v
-                       RejectAndExplain               PaymentRecovery --> Complete/Retry
-
-The PaymentGatekeeper is the load-bearing wall of "The Bar":
-deterministic, no LLM calls, pure arithmetic + catalog-bound checks.
-It is the ONLY node authorized to flip a cart to AUDITED_OK.
+Changes from the previous version:
+  1. Dropped BadRequestError / ServerError / GatewayError / RazorpayError
+     from the `razorpay.errors` import — this installed SDK version does
+     not export them, and importing names that don't exist crashes the
+     Uvicorn worker at startup before it ever binds a socket. We only
+     import the error classes we've confirmed exist:
+     SignatureVerificationError (specific) plus our own
+     RazorpayNetworkTimeout / RazorpayOrderMismatchError.
+  2. create_order_node no longer relies on a specific RateLimit exception
+     type or a broad RazorpayError base class, neither of which we can
+     assume are importable/stable across SDK versions. Instead:
+       - The pre-existing specific exceptions (RazorpayNetworkTimeout,
+         SignatureVerificationError, RazorpayOrderMismatchError) are
+         still caught FIRST, by type, exactly as before.
+       - A trailing `except Exception` acts as the catch-all backstop
+         for anything else the SDK raises (including 429s, which this
+         SDK version apparently surfaces as a generic exception rather
+         than a dedicated RateLimit class). We sniff the stringified,
+         lowercased message for "429" / "rate limit" / "too many
+         requests" to route it into the same retryable RateLimit path
+         as before; anything that doesn't match falls into a final
+         UnclassifiedError branch, logged and handled gracefully rather
+         than propagating and taking down the worker.
+     NOTE: `except Exception` must come AFTER the specific `except`
+     clauses, not before — Python matches except clauses top-to-bottom,
+     so a broad Exception handler placed first would silently swallow
+     the more specific exceptions below it and make that block dead code.
 """
 
 from __future__ import annotations
@@ -34,10 +48,6 @@ from razorpay_client import (
 )
 
 
-# ------------------------------------------------------------------
-# LangGraph state container. We keep CartState as the nested payload
-# and add graph-scoped scratch fields (messages to user, error info).
-# ------------------------------------------------------------------
 class GraphState(TypedDict, total=False):
     cart: CartState
     catalog: Catalog
@@ -45,18 +55,9 @@ class GraphState(TypedDict, total=False):
     user_messages: list[str]
     last_error: Optional[str]
     order_id: Optional[str]
-    gateway: RazorpayGateway  # injected dependency, not serialized in real prod use
+    gateway: RazorpayGateway
 
 
-# ==================================================================
-# NODE 1: UpsellAgent
-# ------------------------------------------------------------------
-# In production this calls an LLM. Here we model it as a function
-# that takes a list of ProposedAction (as if produced by an LLM
-# tool-call) and applies them to the cart in DRAFT state. Every
-# rationale is preserved on the LineItem for the audit trail —
-# nothing enters the cart without an explicit stated reason.
-# ==================================================================
 def upsell_agent_node(state: GraphState) -> GraphState:
     cart = state["cart"]
     catalog = state["catalog"]
@@ -66,7 +67,22 @@ def upsell_agent_node(state: GraphState) -> GraphState:
         AUDIT.log("UPSELL_PROPOSED", cart.cart_id, action.model_dump())
 
         if action.action_type == "ADD_ITEM":
-            item = catalog.get(action.sku)
+            try:
+                item = catalog.get(action.sku)
+            except KeyError:
+                # Defense in depth: even though the gatekeeper below
+                # ALSO independently re-validates every SKU against the
+                # catalog, we don't let a hallucinated SKU silently
+                # vanish here either — log it explicitly so the audit
+                # trail shows exactly what was rejected and why, at
+                # the earliest point it was detected.
+                AUDIT.log(
+                    "UPSELL_REJECTED_UNKNOWN_SKU",
+                    cart.cart_id,
+                    {"sku": action.sku, "reason": "SKU not found in catalog"},
+                )
+                continue
+
             if not item.is_upsell_eligible:
                 AUDIT.log(
                     "UPSELL_SKIPPED_INELIGIBLE",
@@ -87,14 +103,11 @@ def upsell_agent_node(state: GraphState) -> GraphState:
             )
 
         elif action.action_type == "APPLY_DISCOUNT":
-            # The agent PROPOSES a discount; it does not get to enforce
-            # it. The gatekeeper below is the only enforcement point.
             for li in cart.line_items:
                 if li.sku == action.sku:
                     li.discount_pct = action.discount_pct or Decimal("0.0")
                     li.upsell_rationale = li.upsell_rationale or action.rationale
 
-    # Agent's own (untrusted) declared total — will be cross-checked next.
     cart.declared_total = cart.computed_total
     cart.status = CartStatus.PENDING_AUDIT
 
@@ -108,23 +121,11 @@ def upsell_agent_node(state: GraphState) -> GraphState:
     return state
 
 
-# ==================================================================
-# NODE 2: PaymentGatekeeper  (THE BAR — deterministic, no LLM)
-# ------------------------------------------------------------------
-# Hard rules enforced here, and ONLY here:
-#   1. Every line item's discount_pct <= catalog max_discount_pct for that SKU.
-#   2. cart.declared_total == recomputed sum of line_item totals (paisa-exact).
-#   3. No negative / zero-quantity / malformed line items slip through
-#      (Pydantic already guarantees this at construction time, but we
-#      re-assert defensively since this is the money boundary).
-# Any violation => AUDIT_FAILED, cart is NEVER sent to Razorpay.
-# ==================================================================
 def payment_gatekeeper_node(state: GraphState) -> GraphState:
     cart = state["cart"]
     catalog = state["catalog"]
     violations: list[str] = []
 
-    # --- Rule 1: per-SKU discount ceiling ---
     for li in cart.line_items:
         try:
             catalog_item = catalog.get(li.sku)
@@ -144,7 +145,6 @@ def payment_gatekeeper_node(state: GraphState) -> GraphState:
                 f"catalog base_price {catalog_item.base_price} (possible tampering)"
             )
 
-    # --- Rule 2: declared total must equal recomputed total, exactly ---
     recomputed = cart.computed_total
     if recomputed != cart.declared_total:
         violations.append(
@@ -152,10 +152,9 @@ def payment_gatekeeper_node(state: GraphState) -> GraphState:
             f"recomputed={recomputed} (diff={cart.declared_total - recomputed})"
         )
 
-    # --- Rule 3: sanity bounds ---
     if recomputed <= 0:
         violations.append(f"Cart total must be > 0, got {recomputed}")
-    if recomputed > Decimal("500000.00"):  # example hard ceiling, e.g. RBI/merchant risk limit
+    if recomputed > Decimal("500000.00"):
         violations.append(f"Cart total {recomputed} exceeds max transactable ceiling of 500000.00 INR")
 
     verdict_payload = {
@@ -171,7 +170,7 @@ def payment_gatekeeper_node(state: GraphState) -> GraphState:
         AUDIT.log("GATEKEEPER_VERDICT_REJECTED", cart.cart_id, verdict_payload)
     else:
         cart.status = CartStatus.AUDITED_OK
-        cart.declared_total = recomputed  # lock in the trusted, recomputed figure
+        cart.declared_total = recomputed
         AUDIT.log("GATEKEEPER_VERDICT_APPROVED", cart.cart_id, verdict_payload)
 
     state["cart"] = cart
@@ -182,9 +181,6 @@ def gatekeeper_router(state: GraphState) -> Literal["approved", "rejected"]:
     return "approved" if state["cart"].status == CartStatus.AUDITED_OK else "rejected"
 
 
-# ==================================================================
-# NODE 3a: RejectAndExplain — reached only on gatekeeper failure
-# ==================================================================
 def reject_and_explain_node(state: GraphState) -> GraphState:
     cart = state["cart"]
     msgs = state.setdefault("user_messages", [])
@@ -197,10 +193,28 @@ def reject_and_explain_node(state: GraphState) -> GraphState:
     return state
 
 
-# ==================================================================
-# NODE 4: CreateOrderNode — calls Razorpay ONLY on an AUDITED_OK cart
-# ==================================================================
 def create_order_node(state: GraphState) -> GraphState:
+    """
+    Calls Razorpay ONLY on an AUDITED_OK cart.
+
+    Exception handling, in order of specificity:
+      1. RazorpayNetworkTimeout / SignatureVerificationError /
+         RazorpayOrderMismatchError — the pre-existing specific
+         failure modes, matched by type, unchanged. These MUST be
+         caught before the generic handler below or they'd never be
+         reached (except clauses match top-to-bottom).
+      2. A trailing `except Exception` — a defensive backstop catching
+         ANY other exception `gateway.create_order()` raises, since we
+         can no longer assume which exception classes this SDK version
+         actually exports (BadRequestError / ServerError / RazorpayError
+         don't exist here — that's what crashed the worker on import).
+         We inspect the exception's stringified message for HTTP 429 /
+         rate-limit signatures to route it into the same explicitly
+         retryable RateLimit path as before; anything else is logged as
+         UnclassifiedError and handled gracefully rather than propagating
+         up through the graph and FastAPI into an unhandled 500 (or a
+         dead worker).
+    """
     cart = state["cart"]
     gateway = state["gateway"]
 
@@ -211,6 +225,7 @@ def create_order_node(state: GraphState) -> GraphState:
 
     try:
         result = gateway.create_order(cart)
+
     except (RazorpayNetworkTimeout, SignatureVerificationError, RazorpayOrderMismatchError) as e:
         cart.status = CartStatus.PAYMENT_FAILED
         state["last_error"] = f"{type(e).__name__}: {e}"
@@ -219,6 +234,32 @@ def create_order_node(state: GraphState) -> GraphState:
             cart.cart_id,
             {"error_type": type(e).__name__, "error": str(e)},
         )
+        state["cart"] = cart
+        return state
+
+    except Exception as e:
+        error_str = str(e).lower()
+
+        if "429" in error_str or "rate limit" in error_str or "too many requests" in error_str:
+            cart.status = CartStatus.PAYMENT_FAILED
+            state["last_error"] = f"RateLimit: {e}"
+            AUDIT.log(
+                "RAZORPAY_RATE_LIMITED",
+                cart.cart_id,
+                {"error_type": type(e).__name__, "error": str(e)},
+            )
+        else:
+            # Ultimate backstop: any exception we didn't anticipate by
+            # name or message still lands here rather than propagating
+            # uncaught and crashing the FastAPI worker.
+            cart.status = CartStatus.PAYMENT_FAILED
+            state["last_error"] = f"UnclassifiedError: {e}"
+            AUDIT.log(
+                "RAZORPAY_ORDER_FAILED_UNCLASSIFIED",
+                cart.cart_id,
+                {"error_type": type(e).__name__, "error": str(e)},
+            )
+
         state["cart"] = cart
         return state
 
@@ -242,33 +283,38 @@ def order_router(state: GraphState) -> Literal["ok", "failed"]:
     return "ok" if state["cart"].status == CartStatus.ORDER_CREATED else "failed"
 
 
-# ==================================================================
-# NODE 5: PaymentRecovery — graceful failure handling
-# ------------------------------------------------------------------
-# This is the demonstration of "system failure handled gracefully":
-# instead of the graph crashing on a raised exception from the
-# Razorpay SDK, CreateOrderNode caught it, set PAYMENT_FAILED, and
-# routed here. This node decides retry vs. user-facing fallback,
-# and always informs the user honestly rather than silently failing.
-# ==================================================================
 def payment_recovery_node(state: GraphState) -> GraphState:
+    """
+    Graceful failure handling. Three distinct user-facing narratives
+    now, up from two — rate limiting gets its own honest message
+    rather than being folded into the generic "something went wrong"
+    branch, because telling a user "try again in a few seconds" is a
+    materially better experience than a vague failure message when
+    the underlying cause is just gateway throttling.
+    """
     cart = state["cart"]
     error = state.get("last_error", "unknown error")
     msgs = state.setdefault("user_messages", [])
 
     AUDIT.log("PAYMENT_RECOVERY_ENTERED", cart.cart_id, {"error": error})
 
-    if "SignatureVerification" in error:
-        # A signature mismatch is a security-relevant failure —
-        # never silently retry, never re-attempt automatically.
+    if error.startswith("RateLimit"):
+        message = (
+            "Our payment gateway is momentarily busy (rate-limited). This is "
+            "not an issue with your order — please try checking out again in "
+            f"a few seconds. Reference: {cart.cart_id}."
+        )
+        cart.status = CartStatus.RECOVERED
+
+    elif "SignatureVerification" in error:
         message = (
             "Payment verification failed a security check on our end. "
             "For your protection, I've halted checkout rather than retrying "
             "automatically. No charge was made. Please try again in a moment, "
-            "or contact support with cart reference "
-            f"{cart.cart_id}."
+            f"or contact support with cart reference {cart.cart_id}."
         )
         cart.status = CartStatus.PAYMENT_FAILED
+
     elif "Timeout" in error or "Network" in error:
         message = (
             "I couldn't reach the payment gateway (network timeout). "
@@ -276,6 +322,7 @@ def payment_recovery_node(state: GraphState) -> GraphState:
             f"if it keeps failing, your reference is {cart.cart_id}."
         )
         cart.status = CartStatus.RECOVERED
+
     else:
         message = (
             "Something went wrong creating your payment order. No charge was made. "
@@ -290,9 +337,6 @@ def payment_recovery_node(state: GraphState) -> GraphState:
     return state
 
 
-# ==================================================================
-# Graph assembly
-# ==================================================================
 def build_graph():
     graph = StateGraph(GraphState)
 
@@ -308,19 +352,13 @@ def build_graph():
     graph.add_conditional_edges(
         "PaymentGatekeeper",
         gatekeeper_router,
-        {
-            "approved": "CreateOrderNode",
-            "rejected": "RejectAndExplain",
-        },
+        {"approved": "CreateOrderNode", "rejected": "RejectAndExplain"},
     )
 
     graph.add_conditional_edges(
         "CreateOrderNode",
         order_router,
-        {
-            "ok": END,
-            "failed": "PaymentRecovery",
-        },
+        {"ok": END, "failed": "PaymentRecovery"},
     )
 
     graph.add_edge("RejectAndExplain", END)

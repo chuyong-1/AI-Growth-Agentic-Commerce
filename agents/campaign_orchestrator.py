@@ -42,10 +42,8 @@ from typing import Optional
 from pydantic import BaseModel, Field, field_validator
 
 from schema import Catalog
-from audit_trail_dynamo import get_audit_trail
+from audit_trail import AUDIT
 from campaign_store import CampaignBudgetStore, BudgetExceededError
-
-AUDIT = get_audit_trail()
 
 
 # ------------------------------------------------------------------
