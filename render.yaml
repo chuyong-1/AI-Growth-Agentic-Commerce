@@ -1,0 +1,42 @@
+# ============================================================
+# FILE: render.yaml  (Render Blueprint)
+# ============================================================
+# Deploys the Dockerfile as a single web service. The two settings
+# that are correctness requirements rather than preferences:
+#
+#   1. ONE INSTANCE, ONE WORKER. Every store in this system is
+#      in-memory and single-process. A second instance (or a second
+#      uvicorn worker) gets its own campaign budget ledger and its own
+#      audit chain and sees none of the other's writes -- the spend
+#      ceilings would silently stop binding globally. The Dockerfile
+#      hardcodes --workers 1; do NOT enable autoscaling here until the
+#      stores are backed by something with server-side atomic
+#      check-and-commit. Scale up (bigger instance), never out.
+#
+#   2. healthCheckPath. /api/health needs no credentials and reports
+#      storage mode, Razorpay mode and the active LLM provider, so a
+#      failed deploy is diagnosable from the dashboard alone.
+#
+# Render injects PORT into the container; the Dockerfile's CMD reads it
+# via ${PORT:-8000}, so nothing is hardcoded here.
+
+services:
+  - type: web
+    name: agentic-commerce
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: singapore          # closest region to an INR/Razorpay demo audience
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      # Left unset deliberately. With no key, /api/chat degrades and
+      # EVERYTHING else -- the gatekeeper, campaigns, the audit trail,
+      # /api/agent/propose, the static UI -- runs exactly as demoed.
+      # Set this in the Render dashboard only if you want the live
+      # conversational agent, and know that a public URL means anyone
+      # who finds it spends your Groq credit.
+      - key: GROQ_API_KEY
+        sync: false            # never stored in the repo; set in dashboard
+      - key: LLM_PROVIDER
+        sync: false

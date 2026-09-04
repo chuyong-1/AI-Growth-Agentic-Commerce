@@ -1,15 +1,23 @@
 # ============================================================
 # FILE: requirements.txt
 # ============================================================
-fastapi==0.115.0
-uvicorn[standard]==0.30.6
-langgraph==0.2.34
-langchain-anthropic==0.2.3
+# Pinned to the versions this project is actually developed and
+# tested against (78 tests green). Regenerated from the working
+# environment after the previous pins were found to be stale by a
+# full major generation on the LangChain packages -- they pinned
+# langchain-core 0.3.x / langgraph 0.2.x while the code runs on
+# 1.x, and razorpay 1.4.2 while agent_graph.py's error-class
+# handling is written against the 2.x SDK surface.
+
+fastapi==0.103.1
+uvicorn[standard]==0.23.2
+langgraph==1.1.6
+langchain-anthropic==1.4.4
 langchain-groq==1.1.3
-langchain-core==0.3.9
-pydantic==2.9.2
-razorpay==1.4.2
-httpx==0.27.2
-rich==13.8.1
+langchain-core==1.4.0
+pydantic==2.13.4
+razorpay==2.0.1
+httpx==0.28.1
+rich==14.3.3
 pytest==8.3.3
 pytest-asyncio==0.24.0
