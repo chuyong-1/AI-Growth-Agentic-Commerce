@@ -8,21 +8,41 @@ CartState from anywhere other than the PaymentGatekeeper — that
 invariant is enforced by the calling graph node, not here, but we
 still re-validate defensively (defense in depth).
 
+SIMULATION MODE
+-----------------
+If no test credentials are configured, this wrapper does NOT fall
+through to a live HTTP call with placeholder keys. That would make
+`python main.py` depend on network access and authenticate as nobody,
+so every "successful checkout" demo would fail with an auth error
+that looks exactly like a transport failure — the demo would appear
+to exercise the recovery path while actually only proving the keys
+were missing.
+
+Instead, absent credentials the gateway runs in an explicitly-labeled
+simulation mode that returns a deterministic order. Set
+RAZORPAY_TEST_KEY_ID / RAZORPAY_TEST_KEY_SECRET to hit the real test
+API. Simulation is reported on the result and by /api/health so it can
+never be mistaken for a genuine order.
+
 Install: pip install razorpay
 """
 
 from __future__ import annotations
 
+import logging
 import os
-import random
 from dataclasses import dataclass
-from decimal import Decimal
 from typing import Optional
 
 import razorpay
 from razorpay.errors import SignatureVerificationError
 
 from schema import CartState, to_paise
+
+logger = logging.getLogger("agentictrade.razorpay")
+
+PLACEHOLDER_KEY_ID = "rzp_test_xxxxxxxxxxxxxx"
+PLACEHOLDER_KEY_SECRET = "test_secret_xxxxxxxxxxxx"
 
 
 class RazorpayNetworkTimeout(Exception):
@@ -43,17 +63,25 @@ class RazorpayOrderResult:
     currency: str
     status: str
     raw: dict
+    simulated: bool = False
 
 
 class RazorpayGateway:
     def __init__(self, key_id: Optional[str] = None, key_secret: Optional[str] = None):
         # TEST MODE credentials only. Never hardcode live keys.
-        self.key_id = key_id or os.environ.get("RAZORPAY_TEST_KEY_ID", "rzp_test_xxxxxxxxxxxxxx")
-        self.key_secret = key_secret or os.environ.get("RAZORPAY_TEST_KEY_SECRET", "test_secret_xxxxxxxxxxxx")
+        self.key_id = key_id or os.environ.get("RAZORPAY_TEST_KEY_ID", PLACEHOLDER_KEY_ID)
+        self.key_secret = key_secret or os.environ.get("RAZORPAY_TEST_KEY_SECRET", PLACEHOLDER_KEY_SECRET)
+        self.simulated = self.key_id == PLACEHOLDER_KEY_ID or self.key_secret == PLACEHOLDER_KEY_SECRET
         self.client = razorpay.Client(auth=(self.key_id, self.key_secret))
         # Purely for the graceful-failure demo — lets us deterministically
         # trigger a failure without needing real flaky network conditions.
         self._force_failure_mode: Optional[str] = None
+
+        if self.simulated:
+            logger.info(
+                "Razorpay running in SIMULATION mode (no test credentials configured). "
+                "Orders are fabricated locally and no HTTP request is made."
+            )
 
     def force_failure(self, mode: Optional[str]) -> None:
         """Test hook: 'timeout' | 'signature' | None"""
@@ -80,6 +108,11 @@ class RazorpayGateway:
             raise SignatureVerificationError(
                 "Simulated signature mismatch on Razorpay response"
             )
+
+        # Failure injection is checked BEFORE this branch, so the
+        # recovery demos exercise the same paths in either mode.
+        if self.simulated:
+            return self._simulated_order(cart, amount_paise, receipt_prefix)
 
         try:
             order = self.client.order.create(
@@ -113,6 +146,28 @@ class RazorpayGateway:
             currency=order["currency"],
             status=order.get("status", "created"),
             raw=order,
+        )
+
+    def _simulated_order(self, cart: CartState, amount_paise: int, receipt_prefix: str) -> RazorpayOrderResult:
+        """Deterministic stand-in for order.create. The order id is
+        derived from the cart id rather than randomized so a demo run
+        is reproducible and the id is traceable back to its cart."""
+        order_id = f"order_sim_{cart.cart_id.replace('cart_', '')}"
+        raw = {
+            "id": order_id,
+            "amount": amount_paise,
+            "currency": cart.currency.value,
+            "receipt": f"{receipt_prefix}_{cart.cart_id}",
+            "status": "created",
+            "simulated": True,
+        }
+        return RazorpayOrderResult(
+            order_id=order_id,
+            amount_paise=amount_paise,
+            currency=cart.currency.value,
+            status="created",
+            raw=raw,
+            simulated=True,
         )
 
     def verify_payment_signature(self, params: dict) -> bool:

@@ -2,8 +2,13 @@
 # FILE: agents/conversational_agent.py
 # ============================================================
 """
-Conversational upsell agent — Anthropic tool-calling front-end for
-the deterministic LangGraph checkout pipeline.
+Conversational upsell agent — tool-calling front-end for the
+deterministic LangGraph checkout pipeline.
+
+The provider is configurable (Anthropic or Groq; see build_chat_model
+below) because which model proposes is not a security-relevant
+decision in this design — the gatekeeper re-derives every number
+regardless of what produced the proposal.
 
 Three explicit tools (instead of one generic envelope) so the model's
 intent is unambiguous and easy to audit/test:
@@ -32,18 +37,77 @@ under-priced charge. See tests/test_adversarial.py for proof.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
 from schema import Catalog, ProposedAction
 
-MODEL_NAME = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+logger = logging.getLogger("agentictrade.conversational_agent")
+
+# ------------------------------------------------------------------
+# Provider selection
+# ------------------------------------------------------------------
+# The proposing model is deliberately swappable. Nothing downstream
+# depends on WHICH model proposes — the gatekeeper re-derives every
+# number regardless — so the provider is a runtime choice, not an
+# architectural one. Running a smaller open model here is a fair test
+# of that claim rather than a compromise of it: a weaker proposer
+# produces more invalid proposals, and the same ceiling rejects them.
+#
+# Both providers expose LangChain's bind_tools() with identical
+# tool-call semantics, which is the only interface run_turn() uses.
+DEFAULT_MODELS = {
+    "anthropic": "claude-sonnet-4-6",
+    "groq": "openai/gpt-oss-120b",
+}
+
+
+def resolve_provider() -> str:
+    """Explicit LLM_PROVIDER wins; otherwise pick whichever key exists.
+
+    Groq is checked first so that setting GROQ_API_KEY is sufficient to
+    switch — no second variable to remember, and no silent fallback to
+    a provider the user has no credit with."""
+    explicit = os.environ.get("LLM_PROVIDER", "").strip().lower()
+    if explicit:
+        if explicit not in DEFAULT_MODELS:
+            raise ValueError(
+                f"LLM_PROVIDER={explicit!r} is not supported. "
+                f"Choose one of: {', '.join(sorted(DEFAULT_MODELS))}"
+            )
+        return explicit
+    if os.environ.get("GROQ_API_KEY"):
+        return "groq"
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return "anthropic"
+    raise RuntimeError(
+        "No LLM credentials found. Set GROQ_API_KEY (free tier at "
+        "console.groq.com/keys) or ANTHROPIC_API_KEY. Only the chat "
+        "endpoint needs this — the gatekeeper, campaigns, audit trail "
+        "and /api/agent/propose all run without any model."
+    )
+
+
+def build_chat_model(temperature: float = 0.2, max_tokens: int = 1024):
+    """Returns a tool-calling chat model for the configured provider."""
+    provider = resolve_provider()
+    model_name = os.environ.get("LLM_MODEL") or DEFAULT_MODELS[provider]
+    logger.info("Conversational agent using provider=%s model=%s", provider, model_name)
+
+    if provider == "groq":
+        from langchain_groq import ChatGroq
+
+        return ChatGroq(model=model_name, temperature=temperature, max_tokens=max_tokens)
+
+    from langchain_anthropic import ChatAnthropic
+
+    return ChatAnthropic(model=model_name, temperature=temperature, max_tokens=max_tokens)
 
 
 # ------------------------------------------------------------------
@@ -173,29 +237,84 @@ class ConversationalAgent:
     """Stateless-per-call wrapper: (history, catalog) -> (assistant_text,
     proposed_actions, updated_history). Caller owns session state."""
 
-    def __init__(self, catalog: Catalog, model_name: str = MODEL_NAME, temperature: float = 0.2):
+    def __init__(self, catalog: Catalog, temperature: float = 0.2, llm=None):
         self.catalog = catalog
+        self.temperature = temperature
         self.lookup_catalog_tool = make_catalog_tool(catalog)
         self.tools = [self.lookup_catalog_tool, propose_upsell, propose_discount, finalize_checkout]
-        self.llm = ChatAnthropic(model=model_name, temperature=temperature, max_tokens=1024)
-        self.llm_with_tools = self.llm.bind_tools(self.tools)
+        # The model is built on first use, not here. api.py constructs
+        # this agent at import time, and every other surface — the
+        # gatekeeper, campaigns, the audit trail, /api/agent/propose —
+        # is supposed to run with no LLM credentials at all. Building
+        # eagerly would make a missing key take down the whole server
+        # instead of just the one endpoint that needs a model.
+        self._llm_with_tools = None
+        if llm is not None:
+            self._llm_with_tools = llm.bind_tools(self.tools)
+
+    @property
+    def llm_with_tools(self):
+        if self._llm_with_tools is None:
+            self._llm_with_tools = build_chat_model(temperature=self.temperature).bind_tools(self.tools)
+        return self._llm_with_tools
+
+    def _invoke_with_retry(self, messages: list, attempts: int = 3) -> AIMessage:
+        """Retries a turn when the provider rejects the model's OWN output.
+
+        Open models served over an OpenAI-compatible API intermittently
+        emit tool calls the provider cannot parse — gpt-oss in
+        particular can leak its internal channel markers into the tool
+        name, and Groq answers 400 `tool_use_failed`. That is a
+        generation glitch, not a bad request from us: the identical
+        payload succeeds on retry.
+
+        Only malformed-tool-call errors are retried. Auth failures, bad
+        model names and quota errors are raised immediately, because
+        retrying those just delays a message the user needs to see.
+        Transport-level 429s are already retried by the provider SDK.
+        """
+        last_error = None
+        for attempt in range(attempts):
+            try:
+                return self.llm_with_tools.invoke(messages)
+            except Exception as e:
+                text = str(e).lower()
+                retryable = "tool_use_failed" in text or "failed to parse tool call" in text
+                if not retryable:
+                    raise
+                last_error = e
+                logger.warning(
+                    "Provider could not parse the model's tool call (attempt %d/%d); retrying",
+                    attempt + 1, attempts,
+                )
+        raise last_error
 
     def run_turn(
         self,
         history: list,
         user_message: str,
-        max_tool_iterations: int = 4,
+        max_tool_iterations: int = 8,
     ) -> tuple[str, list[ProposedAction], list]:
         messages = [SystemMessage(content=SYSTEM_PROMPT)] + history + [HumanMessage(content=user_message)]
         proposed_actions: list[ProposedAction] = []
 
         for _ in range(max_tool_iterations):
-            ai_msg: AIMessage = self.llm_with_tools.invoke(messages)
+            ai_msg: AIMessage = self._invoke_with_retry(messages)
             messages.append(ai_msg)
 
             tool_calls = getattr(ai_msg, "tool_calls", None) or []
             if not tool_calls:
                 final_text = ai_msg.content if isinstance(ai_msg.content, str) else _flatten(ai_msg.content)
+                if not final_text.strip():
+                    # Reasoning models routinely end a tool-calling turn with
+                    # empty `content`, having put their prose in a separate
+                    # reasoning field. That field is internal chain-of-thought
+                    # and is deliberately NOT surfaced — it is unreviewed text
+                    # that would appear to the user as the assistant speaking.
+                    # Describe the proposals instead: derived from the actions
+                    # actually emitted, so it cannot claim something the cart
+                    # does not reflect.
+                    final_text = _summarize_proposals(proposed_actions)
                 return final_text, proposed_actions, messages[1:]
 
             for call in tool_calls:
@@ -254,6 +373,39 @@ class ConversationalAgent:
             proposed_actions,
             messages[1:],
         )
+
+
+def _summarize_proposals(actions: list[ProposedAction]) -> str:
+    """Human-readable stand-in for when the model returns no prose.
+
+    Every claim here is read back off the emitted actions rather than
+    written freely, so this can never describe a change the cart does
+    not contain. It also never says a discount was *granted* — at this
+    point nothing has been through the gatekeeper yet.
+    """
+    if not actions:
+        return "I couldn't find anything to change on your cart — could you rephrase that?"
+
+    added = [a.sku for a in actions if a.action_type == "ADD_ITEM"]
+    discounts = [(a.sku, a.discount_pct) for a in actions if a.action_type == "APPLY_DISCOUNT"]
+    finalizing = any(a.action_type == "FINALIZE" for a in actions)
+
+    parts: list[str] = []
+    if added:
+        parts.append(f"proposed adding {', '.join(added)}")
+    if discounts:
+        parts.append(
+            "proposed a discount of "
+            + ", ".join(f"{pct}% on {sku}" for sku, pct in discounts)
+        )
+    if finalizing:
+        parts.append("moved your cart to checkout")
+
+    summary = "; ".join(parts) if parts else "updated your cart"
+    return (
+        f"I've {summary}. Everything is being re-checked against the catalog "
+        f"before any charge is created — see the cart and audit trail."
+    )
 
 
 def _flatten(content) -> str:

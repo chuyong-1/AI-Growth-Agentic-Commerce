@@ -2,30 +2,28 @@
 # FILE: session_store.py
 # ============================================================
 """
-In-memory session/cart store — thread-safe, zero-dependency
-replacement for the DynamoDB-backed version.
+In-memory session/cart store — thread-safe, zero-dependency.
 
-WHY A LOCK PER OPERATION, NOT ONE GLOBAL LOCK
-----------------------------------------------
-A single global lock around every read/write would serialize all
-traffic across every cart, which defeats the purpose of demonstrating
-per-resource concurrency control. Instead, this uses ONE lock to
-guard the dict itself (protecting Python's dict from concurrent
-mutation, which is technically GIL-safe for single ops but not for
-compound read-modify-write sequences), and the optimistic-versioning
-logic below is what actually simulates DynamoDB's per-item
-ConditionExpression semantics: read version -> compute -> compare-
-and-swap under the lock.
-
-This preserves the exact contract the DynamoDB version had:
+THE CONTRACT
+--------------
   - save_cart(cart, expected_version) raises SessionConflictError if
     the stored version has moved since the caller last read it.
   - Nothing here silently overwrites a concurrent write.
+
+The lock guards the dict against compound read-modify-write sequences
+(single dict ops are GIL-safe; read-then-write is not). The
+optimistic versioning on top is what enforces the contract: read
+version -> compare -> swap, all inside one critical section, so a
+writer working from a version someone else has already superseded is
+told to retry rather than silently winning.
+
+Critically, the version is checked against what is STORED, not
+against what the caller believes — a caller cannot talk its way past
+a conflict by passing a version it made up.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 from dataclasses import dataclass, field
@@ -63,12 +61,11 @@ class SessionStore:
     uvicorn worker.
 
     NOTE ON SCOPE: this intentionally does NOT persist across process
-    restarts — that's the tradeoff explicitly requested for a
-    zero-friction local demo. In a real deployment this class's
-    interface is what you'd re-implement against DynamoDB, Redis, or
-    Postgres; nothing in api.py needs to change to swap it, since
-    every caller only depends on this class's public method
-    signatures, not its storage mechanism.
+    restarts, and it is correct only within a single process. In a
+    real deployment this class's interface is what you'd re-implement
+    against Redis, Postgres, or DynamoDB; nothing in api.py needs to
+    change to swap it, since every caller depends only on this
+    class's public method signatures, not its storage mechanism.
     """
 
     def __init__(self):
@@ -90,8 +87,7 @@ class SessionStore:
 
     def save_cart(self, cart: CartState, expected_version: Optional[int] = None) -> int:
         """
-        Optimistic-locking write, mirroring DynamoDB's
-        ConditionExpression semantics exactly:
+        Optimistic-locking write:
           - expected_version is None -> unconditional write (first
             save of a brand-new cart).
           - expected_version is an int -> the write only succeeds if
@@ -99,9 +95,7 @@ class SessionStore:
             concurrent request already advanced the version (e.g. a
             double-submitted checkout), this raises
             SessionConflictError instead of silently clobbering that
-            newer write — the same guarantee the DynamoDB
-            ConditionExpression gave us, just enforced under a Python
-            lock instead of a database-side condition.
+            newer write.
         """
         with self._lock:
             existing = self._state.carts.get(cart.cart_id)

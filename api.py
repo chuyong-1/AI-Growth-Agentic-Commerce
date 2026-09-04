@@ -17,6 +17,7 @@ Run with:
 from __future__ import annotations
 
 import logging
+import os
 from decimal import Decimal
 from typing import Optional
 
@@ -32,13 +33,18 @@ from schema import Catalog, CatalogItem, CartState, CartStatus, ProposedAction
 from audit_trail import AUDIT
 from razorpay_client import RazorpayGateway
 from agent_graph import build_graph
-from agents.conversational_agent import ConversationalAgent
+from agents.conversational_agent import (
+    DEFAULT_MODELS,
+    ConversationalAgent,
+    resolve_provider,
+)
 from agents.campaign_orchestrator import (
     DurableCampaignBudget,
     CampaignStatus,
     run_campaign_cycle_durable,
 )
 from campaign_store import get_campaign_store
+from campaign_scheduler import expire_stale_campaigns
 from session_store import get_session_store, SessionConflictError
 from catalog_feed import build_catalog_feed, build_well_known_manifest
 
@@ -139,6 +145,18 @@ async def handle_unexpected_error(request: Request, exc: Exception):
 # ------------------------------------------------------------------
 def _base_url(request: Request) -> str:
     return str(request.base_url).rstrip("/")
+
+
+def _llm_status() -> str:
+    """Which provider /api/chat would use, or why it can't run.
+
+    Reported by /api/health so a missing key is visible before someone
+    types into the chat box, not after."""
+    try:
+        provider = resolve_provider()
+    except (RuntimeError, ValueError) as e:
+        return f"not configured ({e.__class__.__name__})"
+    return f"{provider}:{os.environ.get('LLM_MODEL') or DEFAULT_MODELS[provider]}"
 
 
 def _load_or_create_cart(cart_id: Optional[str]) -> tuple[CartState, int]:
@@ -279,6 +297,13 @@ def chat(req: ChatRequest):
         assistant_text, proposed_actions, updated_history = AGENT.run_turn(
             history=history, user_message=req.message
         )
+    except RuntimeError as e:
+        # Raised by the provider resolver when no LLM credentials exist.
+        # 503 with the setup instruction, rather than a 502 that reads
+        # like the provider is down.
+        logger.error("No LLM configured for cart=%s: %s", cart.cart_id, e)
+        AUDIT.log("LLM_NOT_CONFIGURED", cart.cart_id, {"error": str(e)})
+        raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:
         logger.exception("LLM turn failed for cart=%s", cart.cart_id)
         AUDIT.log("LLM_TURN_FAILED", cart.cart_id, {"error": str(e)})
@@ -441,6 +466,19 @@ def campaign_status(period_label: Optional[str] = None):
     }
 
 
+@app.post("/api/campaigns/expire")
+def expire_campaigns(period_label: Optional[str] = None):
+    """Releases budget held by campaigns past their expiry.
+
+    Exposed as an endpoint so the sweep is triggerable in a demo; in a
+    long-running deployment this is what cron would call."""
+    if period_label is not None and not period_label.strip():
+        raise HTTPException(status_code=400, detail="period_label, if provided, cannot be blank")
+
+    expired = expire_stale_campaigns(CAMPAIGN_STORE, period_label=period_label)
+    return {"expired_count": len(expired), "expired": expired}
+
+
 @app.get("/api/campaigns/audit")
 def campaign_audit():
     entries = AUDIT.history_for_cart("campaign_system")
@@ -527,6 +565,8 @@ def health():
     return {
         "status": "ok",
         "storage": "in-memory (thread-safe, single-process)",
+        "razorpay_mode": "simulated" if RazorpayGateway().simulated else "test-api",
+        "llm": _llm_status(),
         "cart_count": SESSION_STORE.cart_count(),
         "audit_entry_count": AUDIT.entry_count(),
         "memory_note": (

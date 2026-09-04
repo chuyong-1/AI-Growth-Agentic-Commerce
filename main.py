@@ -5,17 +5,25 @@
 """
 Run with: python main.py
 
-No AWS account, no moto, no environment variables required — every
-store this script touches (audit trail, campaign budget) is an
-in-memory, thread-safe singleton from the local storage modules.
+Fully offline: no cloud account, no network access, and no environment
+variables required. Every store this script touches (audit trail,
+campaign budget) is an in-memory singleton, and Razorpay runs in
+simulation mode unless real test credentials are configured.
 """
 
+import sys
 from decimal import Decimal
 
 from schema import Catalog, CatalogItem, CartState, ProposedAction
 from audit_trail import AUDIT
 from razorpay_client import RazorpayGateway
 from agent_graph import build_graph
+from campaign_store import CampaignBudgetStore, DurableCampaignBudget, BudgetExceededError
+
+# Output contains ₹ and em dashes; Windows consoles default to cp1252
+# and raise UnicodeEncodeError mid-run rather than substituting.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
 def make_catalog() -> Catalog:
@@ -151,16 +159,17 @@ def scenario_external_agent_propose():
     print("(This exact graph is what /api/agent/propose invokes server-side.)")
 
 
-def scenario_campaign_cycle_mixed_outcomes():
-    print("\n===== SCENARIO 5: Campaign cycle — one approved, one rejected =====")
-    from campaign_store import CampaignBudgetStore, DurableCampaignBudget, BudgetExceededError
-
-    store = CampaignBudgetStore()
-    budget = DurableCampaignBudget(
+def make_campaign_budget() -> DurableCampaignBudget:
+    return DurableCampaignBudget(
         period_label="demo-period-1",
         max_discount_spend=Decimal("5000.00"),
         max_concurrent_campaigns=3,
     )
+
+
+def scenario_campaign_cycle_mixed_outcomes(store: CampaignBudgetStore):
+    print("\n===== SCENARIO 5: Campaign cycle — one approved, one rejected =====")
+    budget = make_campaign_budget()
     store.ensure_budget(budget)
 
     campaign_a_amount = Decimal("2000.00")
@@ -189,16 +198,13 @@ def scenario_campaign_cycle_mixed_outcomes():
           f"(ceiling ₹{budget.max_discount_spend})")
 
 
-def scenario_campaign_cycle_budget_depletion():
+def scenario_campaign_cycle_budget_depletion(store: CampaignBudgetStore):
     print("\n===== SCENARIO 6: Second cycle — prior spend blocks an otherwise-affordable campaign =====")
-    from campaign_store import CampaignBudgetStore, DurableCampaignBudget, BudgetExceededError
-
-    store = CampaignBudgetStore()
-    budget = DurableCampaignBudget(
-        period_label="demo-period-1",
-        max_discount_spend=Decimal("5000.00"),
-        max_concurrent_campaigns=3,
-    )
+    # Deliberately the SAME store and period as Scenario 5: the point
+    # of this scenario is that spend committed by an earlier cycle
+    # constrains a later one. A fresh store here would reset the
+    # ledger and the scenario would silently demonstrate nothing.
+    budget = make_campaign_budget()
     store.ensure_budget(budget)
 
     remaining_before = store.remaining_budget("demo-period-1")
@@ -239,8 +245,10 @@ if __name__ == "__main__":
     scenario_guardrail_blocks_excessive_discount()
     scenario_graceful_failure()
     scenario_external_agent_propose()
-    scenario_campaign_cycle_mixed_outcomes()
-    scenario_campaign_cycle_budget_depletion()
+
+    campaign_store = CampaignBudgetStore()
+    scenario_campaign_cycle_mixed_outcomes(campaign_store)
+    scenario_campaign_cycle_budget_depletion(campaign_store)
 
     print("\n===== FULL IMMUTABLE AUDIT TRAIL =====")
     print(AUDIT.pretty_print())

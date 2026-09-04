@@ -2,8 +2,11 @@
 # FILE: campaign_store.py
 # ============================================================
 """
-In-memory campaign budget store — thread-safe, zero-dependency
-replacement for the DynamoDB-backed version.
+In-memory campaign budget store — thread-safe, zero-dependency.
+
+Holds two things: the per-period budget ledger (how much has been
+committed, how many campaigns are active) and the campaign records
+that account for who is holding each reservation.
 
 CONCURRENCY MODEL
 -------------------
@@ -18,23 +21,23 @@ record like a cart. The naive bug this guards against:
     Real total should have been 1800, which EXCEEDS the 1500 ceiling.
     Both writes "succeeded" and the ceiling was silently violated.
 
-The fix is the same pattern used in the DynamoDB version, just
-enforced with a Python Lock instead of a database-side
-ConditionExpression: the ENTIRE read -> compute -> ceiling-check ->
-write sequence happens as one atomic critical section. Thread B is
-BLOCKED from even reading committed_spend until Thread A's full
+The fix: the ENTIRE read -> compute -> ceiling-check -> write
+sequence happens as one atomic critical section. Thread B is BLOCKED
+from even reading committed_spend until Thread A's full
 reserve-or-reject sequence has completed and released the lock — so
 Thread B's read is always the post-A value, and the race above is
 structurally impossible, not just improbable.
 
-This is actually a STRONGER guarantee than the DynamoDB optimistic-
-locking version (which could still lose a retry race under enough
-contention) — a single-process lock gives true mutual exclusion. The
-tradeoff, called out honestly: this only holds within one Python
-process. A real multi-instance deployment (multiple Lambda/uvicorn
-workers) needs the DynamoDB version's cross-process coordination.
-That tradeoff is exactly why the DynamoDB version exists as the
-production target and this one is explicitly the local-dev stand-in.
+THE TRADEOFF, STATED PLAINLY: a single-process lock gives true mutual
+exclusion, but only within one Python process. This store is correct
+under `uvicorn api:app` (one worker, many threads) and is NOT correct
+across multiple workers or hosts — two processes each have their own
+lock and their own dict, so they would not see each other's spend at
+all. Scaling out means replacing this class with a backend whose
+check-and-commit is atomic on the server side (a DynamoDB conditional
+UpdateItem, a Postgres `UPDATE ... WHERE committed + :amt <= ceiling`,
+or a Redis Lua script). Every caller depends only on this class's
+public method signatures, so that swap touches no other module.
 """
 
 from __future__ import annotations
@@ -74,6 +77,23 @@ class _BudgetRecord:
     active_count: int = 0
 
 
+@dataclass
+class CampaignRecord:
+    """What an approved campaign is holding against a budget period.
+
+    `reserved_amount` is what release() must give back — storing it on
+    the record rather than recomputing it at expiry time means a later
+    catalog price change can never cause a release to return a
+    different amount than was originally reserved, which would drift
+    the ledger."""
+    campaign_id: str
+    period_label: str
+    target_sku: str
+    reserved_amount: Decimal
+    expires_at: float
+    status: str = "ACTIVE"
+
+
 class CampaignBudgetStore:
     """
     Thread-safe, in-process budget ledger. `try_reserve` holds the
@@ -81,11 +101,18 @@ class CampaignBudgetStore:
     critical design point, not an incidental detail. See module
     docstring for why a narrower lock scope would reintroduce the
     exact race this class exists to prevent.
+
+    Note that no public method calls another public method while
+    holding the lock; `threading.Lock` is not reentrant, so doing so
+    would deadlock. `expire_due_campaigns` is the one place that could
+    be tempted to, and it deliberately releases the lock between
+    selecting due campaigns and releasing them.
     """
 
     def __init__(self):
         self._lock = threading.Lock()
         self._budgets: dict[str, _BudgetRecord] = {}
+        self._campaigns: dict[str, CampaignRecord] = {}
 
     def ensure_budget(self, budget: DurableCampaignBudget) -> None:
         with self._lock:
@@ -166,23 +193,92 @@ class CampaignBudgetStore:
                 "active_count": record.active_count,
             }
 
-    def release(self, period_label: str, amount: Decimal) -> None:
-        """Frees budget and decrements the active count — called when
-        a campaign expires or is cancelled early. Floors both values
-        at zero defensively (a release should never be able to drive
-        the ledger negative even under a bookkeeping bug upstream)."""
+    # ---------------- campaign records ----------------
+    def record_campaign(self, record: CampaignRecord) -> None:
+        """Registers an approved campaign as the holder of a reservation.
+
+        Called only after try_reserve() has already succeeded, so this
+        never performs a ceiling check itself — it records WHO holds
+        budget that has already been committed, which is what makes a
+        later release attributable to a specific campaign instead of
+        being an unaccounted-for adjustment to the ledger."""
         with self._lock:
-            record = self._budgets.get(period_label)
-            if record is None:
-                logger.warning("release() called for unknown period '%s' — ignoring", period_label)
-                return
-            record.committed_spend = max(Decimal("0.00"), record.committed_spend - amount)
-            record.active_count = max(0, record.active_count - 1)
+            self._campaigns[record.campaign_id] = record
+
+    def get_campaign(self, campaign_id: str) -> Optional[CampaignRecord]:
+        with self._lock:
+            return self._campaigns.get(campaign_id)
+
+    def active_campaigns(self, period_label: Optional[str] = None) -> list[CampaignRecord]:
+        with self._lock:
+            return [
+                c for c in self._campaigns.values()
+                if c.status == "ACTIVE"
+                and (period_label is None or c.period_label == period_label)
+            ]
+
+    def release_campaign(self, campaign_id: str) -> bool:
+        """
+        Releases one campaign's reservation back to its budget period
+        and marks it EXPIRED. Returns True if this call performed the
+        release, False if the campaign was unknown or already released.
+
+        IDEMPOTENCE IS THE POINT: the status check and the ledger
+        decrement happen under one lock acquisition, so two concurrent
+        expiry sweeps (or a sweep racing a manual cancel) cannot both
+        see the campaign as ACTIVE and each give its budget back —
+        which would silently free twice what was ever reserved.
+        """
+        with self._lock:
+            campaign = self._campaigns.get(campaign_id)
+            if campaign is None:
+                logger.warning("release_campaign() for unknown campaign '%s' — ignoring", campaign_id)
+                return False
+            if campaign.status != "ACTIVE":
+                return False
+
+            budget = self._budgets.get(campaign.period_label)
+            if budget is None:
+                logger.warning(
+                    "Campaign '%s' references unknown period '%s' — marking expired without release",
+                    campaign_id, campaign.period_label,
+                )
+                campaign.status = "EXPIRED"
+                return False
+
+            # Floored defensively: a release must never be able to drive
+            # the ledger negative, even under a bookkeeping bug upstream.
+            budget.committed_spend = max(
+                Decimal("0.00"), budget.committed_spend - campaign.reserved_amount
+            )
+            budget.active_count = max(0, budget.active_count - 1)
+            campaign.status = "EXPIRED"
+            return True
+
+    def expire_due_campaigns(self, now_epoch: float, period_label: Optional[str] = None) -> list[CampaignRecord]:
+        """
+        Finds every ACTIVE campaign past its expires_at and releases it.
+
+        Selection and release both go through the lock via
+        release_campaign(), so a campaign that another sweep already
+        claimed is skipped rather than double-released — the scan is
+        advisory, the release is authoritative.
+        """
+        with self._lock:
+            due = [
+                c for c in self._campaigns.values()
+                if c.status == "ACTIVE"
+                and c.expires_at <= now_epoch
+                and (period_label is None or c.period_label == period_label)
+            ]
+
+        return [c for c in due if self.release_campaign(c.campaign_id)]
 
     def clear_all(self) -> None:
         """Test/demo utility only."""
         with self._lock:
             self._budgets = {}
+            self._campaigns = {}
 
 
 _CAMPAIGN_STORE_SINGLETON: Optional[CampaignBudgetStore] = None

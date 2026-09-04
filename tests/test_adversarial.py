@@ -278,12 +278,13 @@ class TestAttack2ArithmeticTampering:
 # exist in the catalog at all.
 # ==================================================================
 class TestAttack3HallucinatedSku:
-    def test_add_item_with_nonexistent_sku_raises_at_agent_layer(self, catalog, fresh_audit):
+    def test_add_item_with_nonexistent_sku_is_dropped_and_audited(self, catalog, fresh_audit):
         """
-        upsell_agent_node calls catalog.get(sku), which raises KeyError
-        for a hallucinated SKU. This must not be allowed to silently
-        proceed or add a phantom line item — it should surface as an
-        explicit, catchable failure rather than corrupting the cart.
+        A hallucinated SKU must never become a line item. upsell_agent_node
+        drops it and records WHY in the audit trail rather than raising —
+        one bad proposal in a batch must not abort the whole turn, but it
+        must also never vanish silently, or the trail would show a cart
+        that changed for no recorded reason.
         """
         cart = CartState()
         actions = [
@@ -295,12 +296,26 @@ class TestAttack3HallucinatedSku:
         ]
 
         state = {"cart": cart, "catalog": catalog, "proposed_actions": actions}
+        result_cart = upsell_agent_node(state)["cart"]
 
-        with pytest.raises(KeyError):
-            upsell_agent_node(state)
+        assert len(result_cart.line_items) == 0
 
-        # Confirm no phantom line item was appended before the raise.
-        assert len(cart.line_items) == 0
+        events = [e["event_type"] for e in fresh_audit.dump()]
+        assert "UPSELL_REJECTED_UNKNOWN_SKU" in events
+
+    def test_valid_proposal_survives_a_hallucinated_one_in_the_same_batch(self, catalog, fresh_audit):
+        """A single bad proposal must not poison the whole batch — the
+        legitimate item alongside it still lands."""
+        cart = CartState()
+        actions = [
+            ProposedAction(action_type="ADD_ITEM", sku="SKU_GHOST_000", rationale="Hallucinated."),
+            ProposedAction(action_type="ADD_ITEM", sku="SKU_MUG_002", rationale="Genuine upsell."),
+        ]
+
+        state = {"cart": cart, "catalog": catalog, "proposed_actions": actions}
+        result_cart = upsell_agent_node(state)["cart"]
+
+        assert [li.sku for li in result_cart.line_items] == ["SKU_MUG_002"]
 
     def test_hallucinated_sku_that_bypasses_agent_is_still_caught_by_gatekeeper(self, catalog, fresh_audit):
         """

@@ -23,17 +23,16 @@ Same non-negotiable split as the rest of the system:
     truth, whether money moved via a single sale or a campaign.
 
 The budget check-and-commit is delegated to CampaignBudgetStore
-(campaign_store.py), which performs it as a single atomic DynamoDB
-conditional update — so two campaign cycles racing each other can
-never both "fit" against the same remaining budget and jointly
-overspend it. This module contains zero read-then-write budget logic
-itself; that TOCTOU-prone pattern was deliberately removed.
+(campaign_store.py), which performs it as a single atomic
+check-and-commit — so two campaign cycles racing each other can never
+both "fit" against the same remaining budget and jointly overspend
+it. This module contains zero read-then-write budget logic itself;
+that TOCTOU-prone pattern was deliberately removed.
 """
 
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
@@ -43,7 +42,12 @@ from pydantic import BaseModel, Field, field_validator
 
 from schema import Catalog
 from audit_trail import AUDIT
-from campaign_store import CampaignBudgetStore, BudgetExceededError
+from campaign_store import (
+    BudgetExceededError,
+    CampaignBudgetStore,
+    CampaignRecord,
+    DurableCampaignBudget,
+)
 
 
 # ------------------------------------------------------------------
@@ -76,20 +80,6 @@ class CampaignProposal(BaseModel):
     @classmethod
     def coerce_decimal(cls, v):
         return Decimal(str(v))
-
-
-@dataclass
-class DurableCampaignBudget:
-    """
-    Config-carrying handle only. Mutable state (committed spend,
-    active count) lives entirely in DynamoDB via CampaignBudgetStore —
-    this object is intentionally NOT a cache of that state, to avoid
-    the staleness/race bug an in-memory mirror would reintroduce.
-    """
-    period_label: str
-    max_discount_spend: Decimal = Decimal("15000.00")  # INR, modeled foregone-margin ceiling
-    max_concurrent_campaigns: int = 3
-    max_single_campaign_discount_pct: Decimal = Decimal("25.0")
 
 
 # ------------------------------------------------------------------
@@ -185,9 +175,9 @@ class CampaignOrchestrator:
 #   2. discount_pct <= budget.max_single_campaign_discount_pct.
 #   3. Campaign's modeled worst-case spend (base_price * discount_pct *
 #      estimated_units_moved) must fit inside remaining budget — this
-#      check-and-commit is a SINGLE ATOMIC DynamoDB conditional update
-#      (CampaignBudgetStore.try_reserve), not a Python read-then-write,
-#      so it cannot be raced by a concurrent campaign cycle.
+#      check-and-commit is a SINGLE ATOMIC operation
+#      (CampaignBudgetStore.try_reserve), not a caller-side
+#      read-then-write, so it cannot be raced by a concurrent cycle.
 #   4. Concurrent active campaign count <= max_concurrent_campaigns —
 #      enforced by the SAME atomic update as (3).
 # Any violation => REJECTED. Nothing goes ACTIVE without passing all four.
@@ -271,9 +261,21 @@ def campaign_gatekeeper_durable(
         return proposal
 
     proposal.status = CampaignStatus.ACTIVE
-    proposal.expires_at = (
-        datetime.now(timezone.utc) + timedelta(hours=proposal.duration_hours)
-    ).isoformat()
+    expires_dt = datetime.now(timezone.utc) + timedelta(hours=proposal.duration_hours)
+    proposal.expires_at = expires_dt.isoformat()
+
+    # Register who holds this reservation. Without this the budget is
+    # committed with no record of what committed it, and campaign_scheduler
+    # has nothing to expire — the reservation would be held forever.
+    store.record_campaign(
+        CampaignRecord(
+            campaign_id=proposal.campaign_id,
+            period_label=budget.period_label,
+            target_sku=proposal.target_sku,
+            reserved_amount=modeled_spend,
+            expires_at=expires_dt.timestamp(),
+        )
+    )
 
     AUDIT.log(
         "CAMPAIGN_VERDICT_APPROVED",

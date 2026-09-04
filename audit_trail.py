@@ -18,13 +18,17 @@ that claims that same tail as its prev_hash, and both appending —
 silently forking the chain into two histories that each individually
 "verify" but disagree with each other.
 
-The DynamoDB version prevented this with an atomic conditional
-UpdateItem on a shared counter row. Here, the equivalent primitive is
-a single threading.Lock held for the ENTIRE
+This is prevented by a single threading.Lock held for the ENTIRE
 read-tail -> compute-hash -> append sequence in `log()`. No other
 thread can read the tail while one thread is mid-append, so two
 threads can never compute entries against the same tail — the fork
 condition is structurally prevented, not just made unlikely.
+
+That guarantee holds within one process. Across processes it does
+not: two workers would each keep their own chain and neither would be
+a complete history. A multi-instance deployment needs append ordering
+decided by a shared authority (an atomic counter row in a database, a
+log service), which is a change of backend, not of this interface.
 
 This is intentionally the ONLY write path (`log()`) — there is no
 update or delete method anywhere in this class, matching the
