@@ -1,3 +1,7 @@
+<p align="center">
+  <img width="100%" src="https://capsule-render.vercel.app/api?type=waving&color=0:000000,40:5C0000,100:FF1E1E&height=180&section=header&text=AI-Growth&fontSize=50&fontColor=FFFFFF&fontAlignY=36&animation=fadeIn&desc=The%20LLM%20proposes.%20A%20deterministic%20gatekeeper%20decides.&descSize=16&descAlignY=58&descColor=FFD6D6" alt="AI-Growth" />
+</p>
+
 # Agentic Commerce — Razorpay Upsell, Checkout & Campaign Agent
 
 A reference architecture for letting an LLM negotiate a sale — and run its own growth campaigns — without ever letting it touch money.
